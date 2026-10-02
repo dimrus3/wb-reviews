@@ -1,0 +1,159 @@
+{
+  "name": "WB Reviews - Revision Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Telegram Message Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.reply_to_message.text }}",
+              "operation": "contains",
+              "value2": "замечание для переделки"
+            }
+          ]
+        }
+      },
+      "name": "Is Revision Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Извлечь product_id из состояния или контекста\n// В реальной реализации нужно хранить контекст ожидания\nconst revisionNote = $input.item.json.message.text;\nconst userId = $input.item.json.message.from.id;\n\n// Пример: получаем последний товар в статусе awaiting_approval для этого пользователя\nreturn {\n  revision_note: revisionNote,\n  user_id: userId\n};"
+      },
+      "name": "Extract Revision Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/awaiting-approval",
+        "method": "GET"
+      },
+      "name": "Get Awaiting Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Взять первый пост для переделки\nconst posts = $input.item.json.posts;\nif (posts && posts.length > 0) {\n  return {\n    product_id: posts[0].product_id,\n    article: posts[0].article,\n    revision_note: $input.item.json.revision_note\n  };\n}\nthrow new Error('Нет постов для переделки');"
+      },
+      "name": "Get First Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/revise",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={{ JSON.stringify({\n  product_id: $json.product_id,\n  revision_note: $json.revision_note\n}) }}"
+      },
+      "name": "Request Revision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "✏️ Пост для товара {{ $json.article }} отправлен на переделку. Новая версия появится через несколько минут."
+      },
+      "name": "Confirm Revision",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1450, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Message Trigger": {
+      "main": [
+        [
+          {
+            "node": "Is Revision Reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Revision Reply?": {
+      "main": [
+        [
+          {
+            "node": "Extract Revision Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Revision Data": {
+      "main": [
+        [
+          {
+            "node": "Get Awaiting Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Awaiting Posts": {
+      "main": [
+        [
+          {
+            "node": "Get First Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get First Post": {
+      "main": [
+        [
+          {
+            "node": "Request Revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Revision": {
+      "main": [
+        [
+          {
+            "node": "Confirm Revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
