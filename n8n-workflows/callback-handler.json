@@ -1,0 +1,270 @@
+{
+  "name": "WB Reviews - Callback Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Telegram Callback",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.callback_query.data }}",
+              "operation": "startsWith",
+              "value2": "approve_"
+            }
+          ]
+        }
+      },
+      "name": "Action: Approve",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.callback_query.data }}",
+              "operation": "startsWith",
+              "value2": "revise_"
+            }
+          ]
+        }
+      },
+      "name": "Action: Revise",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.callback_query.data }}",
+              "operation": "startsWith",
+              "value2": "skip_"
+            }
+          ]
+        }
+      },
+      "name": "Action: Skip",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const productId = $input.item.json.callback_query.data.replace('approve_', '');\nreturn { product_id: parseInt(productId) };"
+      },
+      "name": "Extract Product ID (Approve)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const productId = $input.item.json.callback_query.data.replace('skip_', '');\nreturn { product_id: parseInt(productId) };"
+      },
+      "name": "Extract Product ID (Skip)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 600]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/approve",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={{ JSON.stringify({ product_id: $json.product_id }) }}"
+      },
+      "name": "Approve API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/skip",
+        "method": "POST",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "product_id",
+              "value": "={{ $json.product_id }}"
+            }
+          ]
+        }
+      },
+      "name": "Skip API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 600]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.callback_query.message.chat.id }}",
+        "messageId": "={{ $json.callback_query.message.message_id }}",
+        "text": "✅ Пост одобрен и будет опубликован в ближайший слот",
+        "additionalFields": {}
+      },
+      "name": "Edit Message (Approved)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1050, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.callback_query.message.chat.id }}",
+        "messageId": "={{ $json.callback_query.message.message_id }}",
+        "text": "⏭ Товар пропущен",
+        "additionalFields": {}
+      },
+      "name": "Edit Message (Skipped)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1050, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.callback_query.message.chat.id }}",
+        "text": "✏️ Напишите замечание для переделки поста:"
+      },
+      "name": "Ask for Revision Note",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [650, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Callback": {
+      "main": [
+        [
+          {
+            "node": "Action: Approve",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Action: Revise",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Action: Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Approve": {
+      "main": [
+        [
+          {
+            "node": "Extract Product ID (Approve)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Skip": {
+      "main": [
+        [
+          {
+            "node": "Extract Product ID (Skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Revise": {
+      "main": [
+        [
+          {
+            "node": "Ask for Revision Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Product ID (Approve)": {
+      "main": [
+        [
+          {
+            "node": "Approve API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Product ID (Skip)": {
+      "main": [
+        [
+          {
+            "node": "Skip API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve API": {
+      "main": [
+        [
+          {
+            "node": "Edit Message (Approved)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip API": {
+      "main": [
+        [
+          {
+            "node": "Edit Message (Skipped)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
