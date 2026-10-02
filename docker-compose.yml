@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  scraper:
+    build: ./scraper
+    container_name: wb_reviews_scraper
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - scraper_data:/app/data
+      - ./scraper/prompts:/app/prompts:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - wb_reviews_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  scraper_data:
+    driver: local
+
+networks:
+  wb_reviews_network:
+    driver: bridge
