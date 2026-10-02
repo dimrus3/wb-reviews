@@ -1,0 +1,391 @@
+{
+  "name": "WB Reviews - Telegram Bot",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Webhook Telegram",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "startsWith",
+              "value2": "/add"
+            }
+          ]
+        }
+      },
+      "name": "Command: /add",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "equals",
+              "value2": "/queue"
+            }
+          ]
+        }
+      },
+      "name": "Command: /queue",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "equals",
+              "value2": "/status"
+            }
+          ]
+        }
+      },
+      "name": "Command: /status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/products/add",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({\n  \"input\": $json.message.text.replace('/add ', '').trim(),\n  \"user_id\": $json.message.from.id\n}) }}"
+      },
+      "name": "Add Product API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/queue/status",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "Queue Status API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/system/status",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "System Status API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "={{ $json.success ? '✅ ' + $json.message : '❌ ' + $json.message }}"
+      },
+      "name": "Reply Add Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "📊 *Статус очереди*\n\n📥 В очереди: {{ $json.queued }}\n🔄 Собирается: {{ $json.collecting }}\n🧠 Анализируется: {{ $json.analyzing }}\n⏳ Ожидает одобрения: {{ $json.awaiting_approval }}\n✅ Одобрено: {{ $json.approved }}\n❌ Ошибки: {{ $json.failed }}\n\n📦 Всего: {{ $json.total }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Queue Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 350],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "⚙️ *Статус системы*\n\n{{ $json.publications_paused ? '⏸ Публикации приостановлены' : '▶️ Публикации активны' }}\n\n📅 Сегодня опубликовано: {{ $json.today_published }}/{{ $json.queue.total }}\n\n⏰ Следующие публикации:\n{{ $json.next_publication_slots.join('\\n') }}\n\n📊 *Очередь:*\n⏳ Ожидает одобрения: {{ $json.queue.awaiting_approval }}\n✅ Одобрено: {{ $json.queue.approved }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply System Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "equals",
+              "value2": "/pause"
+            }
+          ]
+        }
+      },
+      "name": "Command: /pause",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 650]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "equals",
+              "value2": "/resume"
+            }
+          ]
+        }
+      },
+      "name": "Command: /resume",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 800]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/publications/pause",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={{ JSON.stringify({ \"user_id\": $json.message.from.id }) }}"
+      },
+      "name": "Pause Publications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 650]
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/publications/resume",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={{ JSON.stringify({ \"user_id\": $json.message.from.id }) }}"
+      },
+      "name": "Resume Publications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 800]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "⏸ Публикации приостановлены"
+      },
+      "name": "Reply Paused",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 650],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "▶️ Публикации возобновлены"
+      },
+      "name": "Reply Resumed",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 800],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Telegram": {
+      "main": [
+        [
+          {
+            "node": "Command: /add",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Command: /queue",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Command: /status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Command: /pause",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Command: /resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command: /add": {
+      "main": [
+        [
+          {
+            "node": "Add Product API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command: /queue": {
+      "main": [
+        [
+          {
+            "node": "Queue Status API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command: /status": {
+      "main": [
+        [
+          {
+            "node": "System Status API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Product API": {
+      "main": [
+        [
+          {
+            "node": "Reply Add Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Status API": {
+      "main": [
+        [
+          {
+            "node": "Reply Queue Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "System Status API": {
+      "main": [
+        [
+          {
+            "node": "Reply System Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command: /pause": {
+      "main": [
+        [
+          {
+            "node": "Pause Publications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command: /resume": {
+      "main": [
+        [
+          {
+            "node": "Resume Publications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause Publications": {
+      "main": [
+        [
+          {
+            "node": "Reply Paused",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Publications": {
+      "main": [
+        [
+          {
+            "node": "Reply Resumed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
