@@ -6,13 +6,16 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
+import os
+import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .database import Database
 from .scraper import WildberriesScraper
+from .discovery import ProductDiscovery, build_queries
 from .analyzer import Analyzer
 from .models import (
     ProductStatus, AddProductRequest, QueueStatusResponse,
@@ -73,6 +76,16 @@ class PublishRequest(BaseModel):
     dry_run: bool = True
 
 
+class UserIdRequest(BaseModel):
+    """Тело запроса с Telegram user_id (n8n присылает именно так)"""
+    user_id: int
+
+
+class NotifiedRequest(BaseModel):
+    """Тело запроса: id постов, отправленных владельцу"""
+    post_ids: list[int]
+
+
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при старте"""
@@ -80,6 +93,27 @@ async def startup_event():
     Path("./data").mkdir(exist_ok=True)
     logger.info("Система запущена")
     logger.info(f"Режим dry-run: {settings.dry_run}")
+    # Поднимаем обработчик очереди: без него товары в статусе queued
+    # (после failed, перезапуска контейнера или ручного сброса) висели
+    # в очереди навсегда — get_next_queued никто не вызывал.
+    asyncio.create_task(queue_worker())
+    # Ежедневный автоподбор товаров по сезонным нишам
+    asyncio.create_task(daily_discovery_worker())
+
+
+async def queue_worker():
+    """Фоновый разбор очереди: берёт по одному товару в статусе queued."""
+    await asyncio.sleep(10)  # даём приложению подняться
+    while True:
+        try:
+            row = db.get_next_queued()
+            if row:
+                logger.info(f"Из очереди: артикул {row['article']} (ID: {row['id']})")
+                await process_product(row["id"], row["article"])
+                continue
+        except Exception as e:
+            logger.error(f"Очередь: ошибка обработки — {e}")
+        await asyncio.sleep(20)
 
 
 @app.get("/health")
@@ -131,6 +165,10 @@ async def add_product(request: AddProductRequest, background_tasks: BackgroundTa
                     "article": article
                 }
             elif status == ProductStatus.FAILED.value:
+                # Без этого товар сбрасывался в queued, но обработку никто
+                # не стартовал (get_next_queued нигде не вызывается) —
+                # он висел в очереди навсегда. Перезапускаем сбор.
+                background_tasks.add_task(process_product, product_id, article)
                 return {
                     "success": True,
                     "message": f"Товар {article} был сброшен и добавлен в очередь повторно",
@@ -200,9 +238,14 @@ async def get_system_status():
 
 
 @app.post("/publications/pause")
-async def pause_publications(user_id: int):
-    """Приостановить публикации"""
-    if user_id != settings.allowed_user_id:
+async def pause_publications(request: Optional[UserIdRequest] = None, user_id: Optional[int] = None):
+    """Приостановить публикации.
+
+    user_id принимается и в JSON-теле ({user_id}), и в query (?user_id=...):
+    n8n-воркфлоу telegram-bot.json присылает тело, curl-примеры — query.
+    """
+    uid = request.user_id if request else user_id
+    if uid != settings.allowed_user_id:
         raise HTTPException(status_code=403, detail="Доступ запрещён")
 
     db.set_system_state("publications_paused", "true")
@@ -210,13 +253,76 @@ async def pause_publications(user_id: int):
 
 
 @app.post("/publications/resume")
-async def resume_publications(user_id: int):
-    """Возобновить публикации"""
-    if user_id != settings.allowed_user_id:
+async def resume_publications(request: Optional[UserIdRequest] = None, user_id: Optional[int] = None):
+    """Возобновить публикации (user_id в теле или в query)."""
+    uid = request.user_id if request else user_id
+    if uid != settings.allowed_user_id:
         raise HTTPException(status_code=403, detail="Доступ запрещён")
 
     db.set_system_state("publications_paused", "false")
     return {"success": True, "message": "Публикации возобновлены"}
+
+
+@app.post("/discovery/run")
+async def run_discovery(count: int = 8, background_tasks: BackgroundTasks = None):
+    """Подобрать и поставить в очередь N товаров из сезонных ниш WB.
+
+    Поиск идёт через Playwright (API search.wb.ru отдаёт 403), поэтому вызов
+    небыстрый — минута-две на 8 товаров.
+    """
+    existing = set(db.get_all_articles())
+    queries = build_queries(limit=max(10, count * 2))
+    finder = ProductDiscovery(
+        headless=settings.playwright_headless,
+        timeout_ms=settings.playwright_timeout,
+    )
+    items = await finder.find(queries, wanted=count, exclude=existing)
+
+    added = []
+    for item in items:
+        product_id, is_new = db.add_product(item["article"], settings.allowed_user_id)
+        added.append({**item, "product_id": product_id, "is_new": is_new})
+        logger.info(f"Автоподбор: {item['article']} «{item['name'][:40]}» ({item['query']})")
+
+    return {
+        "success": True,
+        "requested": count,
+        "found": len(added),
+        "queries_used": len(queries),
+        "products": added,
+    }
+
+
+async def daily_discovery_worker():
+    """Раз в сутки в 08:00 по Новосибирску добираем товары в очередь."""
+    import datetime as _dt
+
+    import pytz
+
+    tz = pytz.timezone(settings.publication_timezone)
+    await asyncio.sleep(30)
+    while True:
+        try:
+            now = _dt.datetime.now(tz)
+            target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += _dt.timedelta(days=1)
+            sleep_s = (target - now).total_seconds()
+            await asyncio.sleep(max(60, sleep_s))
+            per_day = int(os.getenv("DISCOVERY_PER_DAY", "8"))
+            logger.info(f"Автоподбор: старт, план {per_day} товаров")
+            existing = set(db.get_all_articles())
+            finder = ProductDiscovery(headless=settings.playwright_headless,
+                                      timeout_ms=settings.playwright_timeout)
+            found = await finder.find(build_queries(limit=per_day * 2),
+                                      wanted=per_day, exclude=existing)
+            for item in found:
+                db.add_product(item["article"], settings.allowed_user_id)
+                logger.info(f"Автоподбор: добавлен {item['article']} «{item['name'][:40]}»")
+            logger.info(f"Автоподбор: добавлено {len(found)} из {per_day}")
+        except Exception as e:
+            logger.error(f"Автоподбор: ошибка — {e}")
+            await asyncio.sleep(600)
 
 
 @app.post("/posts/approve")
@@ -259,10 +365,64 @@ async def skip_post(product_id: int):
 
 
 @app.get("/posts/awaiting-approval")
-async def get_awaiting_approval():
-    """Получить посты, ожидающие одобрения"""
-    posts = db.get_awaiting_approval()
+async def get_awaiting_approval(unnotified: bool = False):
+    """Получить посты, ожидающие одобрения.
+
+    unnotified=true — только те, что владельцу ещё не отправляли (n8n опрашивает
+    эндпоинт по расписанию и без фильтра присылает один пост повторно).
+    """
+    posts = db.get_awaiting_approval(unnotified_only=unnotified)
     return {"posts": posts}
+
+
+@app.get("/products/{product_id}/image.jpg")
+async def product_image_jpg(product_id: int):
+    """Отдать главное фото товара в JPEG.
+
+    Telegram не принимает webp по URL («failed to get HTTP URL content»),
+    а WB отдаёт только webp. Поэтому качаем webp у WB и перекодируем в JPEG
+    через Pillow — дальше n8n передаёт Telegram уже наш URL.
+    """
+    import io
+
+    from PIL import Image
+
+    data = db.get_product_data(product_id)
+    if not data or not data.image_url:
+        raise HTTPException(status_code=404, detail="У товара нет фото")
+
+    cache_dir = os.getenv("IMAGE_CACHE_DIR", "/app/data")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"img_{product_id}.jpg")
+    if not os.path.exists(cache_path):
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(
+                    data.image_url,
+                    headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.wildberries.ru/"},
+                )
+                resp.raise_for_status()
+                raw = resp.content
+        except Exception as e:
+            logger.warning(f"Не удалось скачать фото товара {product_id}: {e}")
+            raise HTTPException(status_code=502, detail="WB не отдал фото")
+
+        try:
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            img.thumbnail((1000, 1000))
+            img.save(cache_path, "JPEG", quality=88)
+        except Exception as e:
+            logger.warning(f"Не удалось перекодировать фото {product_id}: {e}")
+            raise HTTPException(status_code=500, detail="Ошибка перекодирования")
+
+    return FileResponse(cache_path, media_type="image/jpeg")
+
+
+@app.post("/posts/notified")
+async def mark_posts_notified(request: NotifiedRequest):
+    """Отметить посты как отправленные владельцу (вызывает n8n после отправки)."""
+    updated = db.mark_posts_notified(request.post_ids)
+    return {"success": True, "updated": updated}
 
 
 @app.post("/publish")
@@ -287,15 +447,18 @@ async def publish_next(request: PublishRequest):
             "message": f"Достигнут дневной лимит публикаций ({settings.max_publications_per_day})"
         }
 
-    # Получить следующий пост
-    post = db.get_next_approved_post()
+    # Получить следующий пост.
+    # В dry-run только смотрим, не помечая товар как publishing — иначе пробный
+    # запуск «съедает» одобренный пост и реальная публикация его не найдёт.
+    is_dry_run = request.dry_run or settings.dry_run
+    post = db.get_next_approved_post(claim=not is_dry_run)
     if not post:
         return {
             "success": False,
             "message": "Нет готовых постов для публикации"
         }
 
-    if request.dry_run or settings.dry_run:
+    if is_dry_run:
         logger.info(f"DRY RUN: Публикация поста {post['id']} для товара {post['article']}")
         return {
             "success": True,

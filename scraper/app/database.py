@@ -75,6 +75,7 @@ class Database:
                     channel_id TEXT,
                     message_id TEXT,
                     revision_note TEXT,
+                    notified_at TIMESTAMP,
                     FOREIGN KEY (product_id) REFERENCES products(id)
                 );
 
@@ -96,8 +97,7 @@ class Database:
                 );
 
                 CREATE TABLE IF NOT EXISTS llm_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date DATE NOT NULL,
+                    date DATE PRIMARY KEY,
                     count INTEGER DEFAULT 1
                 );
 
@@ -107,6 +107,43 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_publications_date ON publications(published_at);
                 CREATE INDEX IF NOT EXISTS idx_llm_requests_date ON llm_requests(date);
             """)
+            self._migrate_llm_requests(conn)
+            self._migrate_posts_notified(conn)
+
+    def _migrate_posts_notified(self, conn):
+        """Добавить posts.notified_at в старые БД.
+
+        Без этого флага Post Approval каждые 5 минут присылает владельцу
+        один и тот же пост заново, пока тот не одобрен.
+        """
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(posts)")]
+        if "notified_at" not in cols:
+            conn.execute("ALTER TABLE posts ADD COLUMN notified_at TIMESTAMP")
+
+    def _migrate_llm_requests(self, conn):
+        """Привести старую схему llm_requests (id + неуникальная date) к date PRIMARY KEY.
+
+        Без UNIQUE(date) запрос `INSERT ... ON CONFLICT(date)` падал с
+        sqlite3.OperationalError и ронял пайплайн на шаге анализа.
+        """
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(llm_requests)")]
+        if "id" not in cols:
+            return
+        conn.execute("ALTER TABLE llm_requests RENAME TO llm_requests_legacy")
+        conn.execute(
+            """CREATE TABLE llm_requests (
+                   date DATE PRIMARY KEY,
+                   count INTEGER DEFAULT 1
+               )"""
+        )
+        conn.execute(
+            """INSERT INTO llm_requests (date, count)
+               SELECT date, SUM(count) FROM llm_requests_legacy GROUP BY date"""
+        )
+        conn.execute("DROP TABLE llm_requests_legacy")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_requests_date ON llm_requests(date)"
+        )
 
     def add_product(self, article: str, user_id: int, marketplace: str = "wildberries") -> Tuple[int, bool]:
         """
@@ -146,6 +183,12 @@ class Database:
                 (marketplace, article, ProductStatus.QUEUED.value, user_id)
             )
             return cursor.lastrowid, True
+
+    def get_all_articles(self) -> List[str]:
+        """Все артикулы, которые уже есть в базе (для автоподбора)."""
+        with self.get_connection() as conn:
+            return [row["article"] for row in
+                    conn.execute("SELECT article FROM products")]
 
     def get_next_queued(self) -> Optional[Dict[str, Any]]:
         """Получить следующий товар для обработки"""
@@ -249,17 +292,34 @@ class Database:
             return dict(row) if row else None
 
     def approve_post(self, post_id: int):
-        """Одобрить пост"""
+        """Одобрить пост, сняв одобрение с остальных версий того же товара.
+
+        Без снятия одобрения v1 остаётся approved=1 и /publish может взять
+        именно её вместо свежей v2 — товар уходит в канал дважды.
+        """
         with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT product_id FROM posts WHERE id = ?", (post_id,)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """UPDATE posts SET approved = 0, approved_at = NULL
+                       WHERE product_id = ? AND id <> ?""",
+                    (row["product_id"], post_id)
+                )
             conn.execute(
                 "UPDATE posts SET approved = 1, approved_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (post_id,)
             )
 
-    def get_next_approved_post(self) -> Optional[Dict[str, Any]]:
+    def get_next_approved_post(self, claim: bool = True) -> Optional[Dict[str, Any]]:
         """
         Получить следующий одобренный пост для публикации
         С защитой от параллельных запусков
+
+        claim=False — только посмотреть, НЕ помечать товар как publishing.
+        Нужно для dry-run: иначе пробная публикация «съедает» одобренный пост
+        и настоящая публикация его уже не находит.
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -270,6 +330,8 @@ class Database:
                    WHERE p.approved = 1
                    AND p.published_at IS NULL
                    AND pr.status = ?
+                   AND p.version = (SELECT MAX(p2.version) FROM posts p2
+                                    WHERE p2.product_id = p.product_id)
                    ORDER BY p.approved_at ASC
                    LIMIT 1""",
                 (ProductStatus.APPROVED.value,)
@@ -277,6 +339,9 @@ class Database:
             row = cursor.fetchone()
             if not row:
                 return None
+
+            if not claim:
+                return dict(row)
 
             post_id = row["id"]
             product_id = row["product_id"]
@@ -391,17 +456,50 @@ class Database:
                 (key, value, value)
             )
 
-    def get_awaiting_approval(self) -> List[Dict[str, Any]]:
-        """Получить товары, ожидающие одобрения"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """SELECT pr.id as product_id, pr.article, p.id as post_id, p.text, p.version
+    def get_awaiting_approval(self, unnotified_only: bool = False) -> List[Dict[str, Any]]:
+        """Получить товары, ожидающие одобрения.
+
+        unnotified_only=True — только те, что владельцу ещё не отправляли:
+        n8n опрашивает эндпоинт каждые 5 минут, без этого фильтра один и тот
+        же пост приходит заново до одобрения.
+        """
+        query = """SELECT pr.id as product_id, pr.article, p.id as post_id, p.text, p.version,
+                          pd.data_json
                    FROM products pr
                    JOIN posts p ON pr.id = p.product_id
+                   LEFT JOIN product_data pd
+                          ON pd.id = (SELECT MAX(id) FROM product_data WHERE product_id = pr.id)
                    WHERE pr.status = ?
-                   AND p.id = (SELECT MAX(id) FROM posts WHERE product_id = pr.id)
-                   ORDER BY p.created_at ASC""",
-                (ProductStatus.AWAITING_APPROVAL.value,)
+                   AND p.id = (SELECT MAX(id) FROM posts WHERE product_id = pr.id)"""
+        if unnotified_only:
+            query += " AND p.notified_at IS NULL"
+        query += " ORDER BY p.created_at ASC"
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (ProductStatus.AWAITING_APPROVAL.value,))
+            posts = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                # image_url тянем из последнего снимка карточки — n8n вставляет
+                # его в Telegram-сообщение как фото с подписью-постом.
+                data_json = item.pop("data_json", None)
+                item["image_url"] = None
+                if data_json:
+                    try:
+                        item["image_url"] = json.loads(data_json).get("image_url")
+                    except (ValueError, TypeError):
+                        pass
+                posts.append(item)
+            return posts
+
+    def mark_posts_notified(self, post_ids: List[int]) -> int:
+        """Отметить посты как отправленные владельцу на одобрение."""
+        if not post_ids:
+            return 0
+        placeholders = ",".join("?" * len(post_ids))
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE posts SET notified_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                post_ids,
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return cursor.rowcount

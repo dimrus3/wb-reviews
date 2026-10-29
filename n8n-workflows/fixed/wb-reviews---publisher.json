@@ -1,0 +1,277 @@
+{
+  "name": "WB Reviews - Publisher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 11,19 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule 11:00 / 19:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        320
+      ],
+      "id": "b6ee4f5e-65a1-5524-9ba9-9db2ba51f2fe"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/publish",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dry_run: false }) }}"
+      },
+      "name": "Get Next Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        440,
+        320
+      ],
+      "id": "0b700c44-0491-5aec-bd85-6f327d133dd1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f86a1f42-71eb-4341-9217-bd7799a0c0b4",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "b02f50d2-9b53-41f1-ae19-815de67eb300",
+              "leftValue": "={{ $json.dry_run }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Has Post?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        320
+      ],
+      "id": "6124f121-60a5-555c-9e22-61957cf6cd3e"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Publish To Channel",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        220
+      ],
+      "id": "c4bcf613-0496-51e3-8135-9b64cf924b45",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/publish/confirm",
+        "method": "POST",
+        "options": {},
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post_id",
+              "value": "={{ $('Get Next Post').item.json.post_id }}"
+            },
+            {
+              "name": "product_id",
+              "value": "={{ $('Get Next Post').item.json.product_id }}"
+            },
+            {
+              "name": "channel_id",
+              "value": "={{ $env.TELEGRAM_CHANNEL_ID }}"
+            },
+            {
+              "name": "message_id",
+              "value": "={{ $json.message_id }}"
+            }
+          ]
+        }
+      },
+      "name": "Confirm Publication",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        120
+      ],
+      "id": "a54ec5a2-8746-522d-9571-adc75979b525"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/publish/uncertain",
+        "method": "POST",
+        "options": {},
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post_id",
+              "value": "={{ $('Get Next Post').item.json.post_id }}"
+            },
+            {
+              "name": "product_id",
+              "value": "={{ $('Get Next Post').item.json.product_id }}"
+            },
+            {
+              "name": "error",
+              "value": "={{ ($json.error && ($json.error.message || $json.error.description)) || 'send failed' }}"
+            }
+          ]
+        }
+      },
+      "name": "Mark Uncertain",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        320
+      ],
+      "id": "5e746d99-224c-5cfe-a950-db539215005f"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.ALLOWED_USER_ID }}",
+        "text": "⚠️ Не удалось опубликовать пост по артикулу {{ $('Get Next Post').item.json.article }}.\n\nПроверьте канал вручную: если пост всё же появился, удалите дубликат.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Notify Owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        320
+      ],
+      "id": "d4f51941-b95d-5a01-bf32-574e6c7a7a22",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule 11:00 / 19:00": {
+      "main": [
+        [
+          {
+            "node": "Get Next Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Next Post": {
+      "main": [
+        [
+          {
+            "node": "Has Post?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Post?": {
+      "main": [
+        [
+          {
+            "node": "Publish To Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish To Channel": {
+      "main": [
+        [
+          {
+            "node": "Confirm Publication",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Uncertain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Uncertain": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "id": "j9OyML8ewmxiYLNU",
+  "versionId": "6633bac7-4047-479b-8b55-9aeef89b4f49"
+}

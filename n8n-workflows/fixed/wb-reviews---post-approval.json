@@ -1,0 +1,236 @@
+{
+  "name": "WB Reviews - Post Approval",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        320
+      ],
+      "id": "4ccb1629-f13e-5d8e-be16-b5f23b2c77f0"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/awaiting-approval?unnotified=true",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "Get Awaiting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        440,
+        320
+      ],
+      "id": "f1a5b886-31de-508a-ab05-6e90d0ebdf37"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "510eeab2-2590-41d3-ae6e-63519db35760",
+              "leftValue": "={{ $json.posts.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Has Posts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        320
+      ],
+      "id": "fb5705ba-9932-5d2b-af13-bf9e726260b5"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "posts"
+      },
+      "name": "Split Posts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        880,
+        320
+      ],
+      "id": "480d2023-8534-5ca9-a3cf-093ce5abd25a"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.ALLOWED_USER_ID }}",
+        "text": "📝 *Новый пост на одобрение*\n\n*Артикул WB:* {{ $json.article }}\n*Версия:* {{ $json.version }}\n\n─────────────────\n\n{{ $json.text }}\n\n─────────────────",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        },
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Одобрить",
+                    "additionalFields": {
+                      "callback_data": "approve_{{ $json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✏️ Переделать",
+                    "additionalFields": {
+                      "callback_data": "revise_{{ $json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "⏭ Пропустить",
+                    "additionalFields": {
+                      "callback_data": "skip_{{ $json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "name": "Send To Owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        320
+      ],
+      "id": "a0ac59a3-fc0e-5f33-807f-96553fe5d42f",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/notified",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ post_ids: [$('Split Posts').item.json.post_id] }) }}"
+      },
+      "name": "Mark Notified",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        320
+      ],
+      "id": "05e3e1d7-7c43-5d1e-b714-e8c6f13eaed3"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Awaiting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Awaiting": {
+      "main": [
+        [
+          {
+            "node": "Has Posts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Posts?": {
+      "main": [
+        [
+          {
+            "node": "Split Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Posts": {
+      "main": [
+        [
+          {
+            "node": "Send To Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send To Owner": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "id": "0EAItJQKk5Dy5tWK",
+  "versionId": "c1d20123-af43-4183-8941-ee4321f8f1c3"
+}

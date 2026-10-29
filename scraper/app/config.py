@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     llm_base_url: str = Field(..., description="Base URL API (например, https://api.openai.com/v1)")
     llm_api_key: str = Field(..., description="API ключ")
     llm_model: str = Field(default="gpt-4", description="Название модели")
-    llm_timeout: int = Field(default=120, description="Таймаут запроса в секундах")
+    llm_timeout: int = Field(default=300, description="Таймаут запроса в секундах (8000 max_tokens на grok держит ответ дольше 120s)")
     llm_max_tokens: int = Field(default=2000, description="Максимум токенов в ответе")
     llm_daily_limit: int = Field(default=100, description="Дневной лимит запросов к модели")
 

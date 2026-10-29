@@ -55,10 +55,22 @@ class WildberriesScraper:
         for attempt in range(self.retry_attempts):
             try:
                 async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=self.headless)
+                    # Антибот WB смотрит на UA и на признаки автоматизации:
+                    # обрезанный UA без версии Chrome он крутит по кругу и
+                    # карточка так и не отрисовывается.
+                    browser = await p.chromium.launch(
+                        headless=self.headless,
+                        args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+                    )
                     context = await browser.new_context(
-                        viewport={'width': 1920, 'height': 1080},
-                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        viewport={'width': 1366, 'height': 900},
+                        user_agent=(
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/131.0.0.0 Safari/537.36'
+                        ),
+                        locale='ru-RU',
+                        extra_http_headers={'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8'},
                     )
                     page = await context.new_page()
                     page.set_default_timeout(self.timeout)
@@ -97,39 +109,77 @@ class WildberriesScraper:
         logger.info(f"Загружаем карточку: {url}")
 
         try:
-            response = await page.goto(url, wait_until='networkidle')
+            # WB отдаёт антибот-челлендж: первый ответ — HTTP 498 и заглушка
+            # ~1.2 КБ, JS решает челлендж за 8-20 с и SPA дорисовывает карточку.
+            # Поэтому networkidle не ждём (он не наступает) и не полагаемся на
+            # один жёсткий таймаут — крутим ожидание h1 с перезагрузкой.
+            response = await page.goto(url, wait_until='domcontentloaded')
 
-            # Проверка капчи
-            if await page.locator('text=проверка').count() > 0:
-                raise Exception("Обнаружена капча - требуется ручная проверка")
+            # Ждём, пока антибот отработает и SPA дорисует карточку.
+            # Признак готовности: title содержит «купить за» либо в HTML
+            # появился imtId. Просто h1 не годится — заглушка антибота тоже
+            # отдаёт документ, и мы ловили имя «...» через 6 секунд.
+            ready = False
+            for attempt in range(3):
+                for _ in range(30):  # до 30 с на попытку
+                    title = (await page.title()).strip()
+                    # Признак именно карточки товара — «купить за» в title.
+                    # По «imtId в HTML» проверять нельзя: главная страница WB
+                    # тоже содержит эту строку в JS-бандлах, и мы ловили
+                    # заголовок главной вместо товара.
+                    if "купить за" in title.lower():
+                        ready = True
+                        break
+                    await page.wait_for_timeout(1000)
+                if ready:
+                    break
+                logger.info(f"Антибот WB не пройден (попытка {attempt + 1}/3), перезагружаем карточку")
+                response = await page.goto(url, wait_until='domcontentloaded')
+            if not ready:
+                raise Exception("Не удалось дождаться карточки товара (антибот WB не пройден)")
 
             # Проверка доступности
-            if response.status == 404:
+            if response and response.status == 404:
                 raise Exception("Товар не найден (404)")
 
-            # Ждём загрузки основного контента
-            await page.wait_for_selector('.product-page__title, .product-page__header', timeout=10000)
+            # Название: в новом лэйауте .product-page__title больше нет,
+            # зато title документа содержит имя товара.
+            page_title = (await page.title()).strip()
+            product_data.name = (re.split(r'\s+купить за', page_title)[0].strip() or None)
+            if not product_data.name:
+                h1_text = ((await page.locator('h1').first.text_content()) or '').strip()
+                product_data.name = h1_text or None
 
-            # Название
-            title_elem = await page.query_selector('.product-page__title')
-            if title_elem:
-                product_data.name = (await title_elem.text_content()).strip()
-
-            # Бренд
-            brand_elem = await page.query_selector('.product-page__header a')
+            # Бренд: первая ссылка на /brands/ в хлебных крошках
+            brand_elem = await page.query_selector('a[href*="/brands/"]')
             if brand_elem:
-                product_data.brand = (await brand_elem.text_content()).strip()
+                product_data.brand = ((await brand_elem.text_content()) or '').strip() or None
 
-            # Извлекаем imtId из данных страницы
-            # imtId обычно содержится в JSON внутри скриптов или data-атрибутах
+            # Извлекаем imtId из HTML: он нужен для API отзывов.
+            # Без регексов — в разметке imtId встречается в разных видах
+            # ("imtId":123, imtId\":123, imtId:123), и шаблон с кавычками
+            # то срабатывал, то нет.
             content = await page.content()
-            imt_match = re.search(r'"imtId"[:\s]+(\d+)', content)
-            if imt_match:
-                product_data.imtId = imt_match.group(1)
+            _imt = None
+            _pos = content.find('imtId')
+            while _pos != -1:
+                _digits = ''
+                for _ch in content[_pos:_pos + 60]:
+                    if _ch.isdigit():
+                        _digits += _ch
+                    elif _digits:
+                        break
+                if len(_digits) >= 6:
+                    _imt = _digits
+                    break
+                _pos = content.find('imtId', _pos + 1)
+            if _imt:
+                product_data.imtId = _imt
                 logger.info(f"Найден imtId: {product_data.imtId}")
 
-            # Цена
-            price_elem = await page.query_selector('.price-block__final-price, ins.price-block__final-price')
+            # Цена: в новом лэйауте финальная цена лежит в единственном <ins>,
+            # старых классов .price-block__final-price больше нет.
+            price_elem = await page.query_selector('ins')
             if price_elem:
                 price_text = (await price_elem.text_content()).strip()
                 price_match = re.search(r'([\d\s]+)', price_text.replace('\xa0', ''))
@@ -138,33 +188,31 @@ class WildberriesScraper:
                     product_data.currency = "RUB"
                     product_data.price_checked_at = datetime.utcnow()
 
-            # Рейтинг
-            rating_elem = await page.query_selector('.product-review__rating')
-            if rating_elem:
-                rating_text = await rating_elem.get_attribute('aria-label')
-                if rating_text:
-                    rating_match = re.search(r'([\d.]+)', rating_text)
-                    if rating_match:
-                        product_data.overall_rating = float(rating_match.group(1))
+            # Рейтинг и число оценок: в новом лэйауте они в одном блоке
+            # вида "4,9 · 327 оценок"
+            rating_block = await page.query_selector('[class*=Rating]')
+            if rating_block:
+                rating_text = ((await rating_block.text_content()) or '').strip()
+                m = re.search(r'(\d[.,]\d)', rating_text)
+                if m:
+                    product_data.overall_rating = float(m.group(1).replace(',', '.'))
+                m = re.search(r'([\d\s\u00a0]+)\s*оцен', rating_text)
+                if m:
+                    cleaned = re.sub(r'[^\d]', '', m.group(1))
+                    if cleaned:
+                        product_data.ratings_count = int(cleaned)
 
-            # Количество оценок
-            reviews_count_elem = await page.query_selector('.product-review__count-review')
-            if reviews_count_elem:
-                count_text = (await reviews_count_elem.text_content()).strip()
-                count_match = re.search(r'(\d+)', count_text)
-                if count_match:
-                    product_data.ratings_count = int(count_match.group(1))
-
-            # Характеристики
+            # Характеристики: старых .product-params__row больше нет,
+            # в новом лэйауте это обычная таблица из двух колонок.
             characteristics = {}
-            char_rows = await page.query_selector_all('.product-params__row')
+            char_rows = await page.query_selector_all('table tr')
             for row in char_rows:
-                name_elem = await row.query_selector('.product-params__cell:first-child')
-                value_elem = await row.query_selector('.product-params__cell:last-child')
-                if name_elem and value_elem:
-                    name = (await name_elem.text_content()).strip()
-                    value = (await value_elem.text_content()).strip()
-                    characteristics[name] = value
+                cells = await row.query_selector_all('td')
+                if len(cells) == 2:
+                    key = ((await cells[0].text_content()) or '').strip()
+                    value = ((await cells[1].text_content()) or '').strip()
+                    if key and value:
+                        characteristics[key] = value
 
             if characteristics:
                 product_data.characteristics = characteristics
@@ -174,6 +222,33 @@ class WildberriesScraper:
             if desc_elem:
                 product_data.description = (await desc_elem.text_content()).strip()
 
+            # Фото товара. og:image надёжнее DOM-селекторов: отдаёт big-версию
+            # и не зависит от ленивой подгрузки галереи. Хост basket-NN бывает
+            # любым (для 1195565901 это basket-44), поэтому ничего не угадываем —
+            # берём готовый URL прямо из мета-тега.
+            try:
+                og_image = await page.evaluate(
+                    "() => { const m = document.querySelector('meta[property=\"og:image\"]');"
+                    " return m ? m.content : null; }"
+                )
+                if og_image:
+                    product_data.image_url = og_image
+                    gallery = await page.evaluate(
+                        "() => Array.from(document.querySelectorAll('img'))"
+                        ".map(i => i.currentSrc || i.src)"
+                        ".filter(u => u && u.indexOf('/images/') !== -1)"
+                    )
+                    # Дедуп + нормализация к big-размеру: c246x328/tm — превью.
+                    urls = []
+                    for u in [og_image] + list(gallery or []):
+                        big = re.sub(r'/images/(tm|c\d+x\d+)/', '/images/big/', u.split('?')[0])
+                        if big not in urls:
+                            urls.append(big)
+                    product_data.image_urls = urls[:10]
+                    logger.info(f"Фото найдено: {len(product_data.image_urls)} (og:image)")
+            except Exception as e:
+                logger.warning(f"Не удалось получить фото товара: {e}")
+
             logger.info(f"Карточка собрана: {product_data.name} ({product_data.brand})")
 
         except Exception as e:
@@ -181,123 +256,88 @@ class WildberriesScraper:
             raise
 
     async def _scrape_reviews(self, page: Page, article: str, product_data: ProductData):
-        """Собрать отзывы"""
+        """Собрать отзывы через публичный API WB.
+
+        DOM-парсинг страницы отзывов больше не работает: WB перешёл на SPA и
+        отдаёт разметку через JS, а классы .feedback/.comments__item исчезли.
+        Зато API feedbacks1/2.wb.ru отдаёт готовый JSON и не требует антибота —
+        проверено: HTTP 200 без cookies, есть text/pros/cons/productValuation.
+        """
         if not product_data.imtId:
-            logger.warning("imtId не найден, пытаемся собрать отзывы через прямую ссылку")
-            # Попробуем перейти по ссылке отзывов на странице
-            reviews_link = await page.query_selector('a[href*="/feedbacks"]')
-            if reviews_link:
-                await reviews_link.click()
-                await page.wait_for_load_state('networkidle')
-            else:
-                logger.warning("Не удалось найти ссылку на отзывы")
-                return
-        else:
-            url = f"https://www.wildberries.ru/catalog/{article}/feedbacks?imtId={product_data.imtId}"
-            logger.info(f"Загружаем отзывы: {url}")
-            await page.goto(url, wait_until='networkidle')
+            logger.warning("imtId не найден — отзывы собрать нельзя")
+            product_data.reviews_complete = True
+            return
 
-        try:
-            # Ждём загрузки отзывов
-            await page.wait_for_selector('.feedback, .comments__item', timeout=10000)
-
-            reviews_collected = 0
-            seen_texts = set()  # Для отсеивания дублей
-
-            while reviews_collected < self.max_reviews:
-                # Собираем видимые отзывы
-                review_elements = await page.query_selector_all('.feedback, .comments__item')
-
-                for elem in review_elements[reviews_collected:]:
-                    if reviews_collected >= self.max_reviews:
-                        break
-
-                    try:
-                        review = Review()
-
-                        # Раскрыть "Читать полностью" если есть
-                        read_more = await elem.query_selector('button:has-text("полностью"), .btn-show-more')
-                        if read_more:
-                            await read_more.click()
-                            await asyncio.sleep(0.5)
-
-                        # Текст отзыва
-                        text_elem = await elem.query_selector('.feedback__text, .comment__text')
-                        if text_elem:
-                            review.text = (await text_elem.text_content()).strip()
-
-                        # Дубликат?
-                        if review.text and review.text in seen_texts:
-                            continue
-                        if review.text:
-                            seen_texts.add(review.text)
-
-                        # Достоинства
-                        pros_elem = await elem.query_selector('.feedback-text__pros, text="Достоинства:"')
-                        if pros_elem:
-                            pros_parent = await pros_elem.evaluate_handle('el => el.parentElement')
-                            review.pros = (await pros_parent.text_content()).replace('Достоинства:', '').strip()
-
-                        # Недостатки
-                        cons_elem = await elem.query_selector('.feedback-text__cons, text="Недостатки:"')
-                        if cons_elem:
-                            cons_parent = await cons_elem.evaluate_handle('el => el.parentElement')
-                            review.cons = (await cons_parent.text_content()).replace('Недостатки:', '').strip()
-
-                        # Оценка
-                        rating_elem = await elem.query_selector('.star-line, [class*="rating"]')
-                        if rating_elem:
-                            rating_class = await rating_elem.get_attribute('class')
-                            rating_match = re.search(r'star-line--(\d)', rating_class or '')
-                            if rating_match:
-                                review.rating = int(rating_match.group(1))
-
-                        # Дата
-                        date_elem = await elem.query_selector('.feedback__date, .comment__date')
-                        if date_elem:
-                            review.date = (await date_elem.text_content()).strip()
-
-                        # Характеристики варианта (цвет, размер)
-                        params = await elem.query_selector_all('.feedback__param')
-                        for param in params:
-                            text = (await param.text_content()).strip().lower()
-                            if 'цвет' in text or 'color' in text:
-                                review.color = text.split(':')[-1].strip()
-                            elif 'размер' in text or 'size' in text:
-                                review.size = text.split(':')[-1].strip()
-
-                        # Статус покупки
-                        verified = await elem.query_selector('.feedback__verified, text="Verified Purchase"')
-                        review.is_verified_purchase = verified is not None
-
-                        # Ответ продавца
-                        seller_reply_elem = await elem.query_selector('.feedback__reply, .seller-answer')
-                        if seller_reply_elem:
-                            review.seller_reply = (await seller_reply_elem.text_content()).strip()
-
-                        product_data.reviews.append(review)
-                        reviews_collected += 1
-
-                    except Exception as e:
-                        logger.warning(f"Ошибка при парсинге отзыва: {e}")
-                        continue
-
-                # Проверяем, есть ли кнопка "Показать ещё"
-                show_more = await page.query_selector('button:has-text("Показать ещё"), .show-more')
-                if show_more and reviews_collected < self.max_reviews:
-                    await show_more.click()
-                    await asyncio.sleep(2)  # Даём время на загрузку
-                else:
+        payload = None
+        for host in ("feedbacks1.wb.ru", "feedbacks2.wb.ru"):
+            url = f"https://{host}/feedbacks/v2/{product_data.imtId}"
+            try:
+                logger.info(f"Загружаем отзывы через API: {url}")
+                data = await page.evaluate(
+                    """async (u) => {
+                        const res = await fetch(u, {headers: {'Accept': 'application/json'}});
+                        if (!res.ok) return {__status: res.status};
+                        return await res.json();
+                    }""",
+                    url,
+                )
+                if isinstance(data, dict) and data.get("__status") is None:
+                    payload = data
                     break
+                logger.warning(f"{host} ответил {data.get('__status') if isinstance(data, dict) else 'ошибка'}")
+            except Exception as e:
+                logger.warning(f"Не удалось получить отзывы с {host}: {e}")
 
-            product_data.reviews_collected = reviews_collected
-            product_data.reviews_complete = reviews_collected < self.max_reviews
-            logger.info(f"Собрано отзывов: {reviews_collected}")
+        if not payload:
+            logger.warning("Отзывы не получены ни с одного хоста — оставляем пустыми")
+            product_data.reviews_complete = True
+            return
 
-        except PlaywrightTimeout:
-            logger.warning("Таймаут при загрузке отзывов - возможно, их нет")
-        except Exception as e:
-            logger.error(f"Ошибка при сборе отзывов: {e}")
+        valuation = payload.get("valuation")
+        if valuation is not None:
+            try:
+                product_data.overall_rating = float(str(valuation).replace(",", "."))
+            except (TypeError, ValueError):
+                pass
+        count = payload.get("feedbackCount")
+        if isinstance(count, int):
+            product_data.ratings_count = count
+
+        seen = set()
+        collected = 0
+        for fb in (payload.get("feedbacks") or []):
+            if collected >= self.max_reviews:
+                break
+            text = (fb.get("text") or "").strip()
+            pros = (fb.get("pros") or "").strip()
+            cons = (fb.get("cons") or "").strip()
+            if not text and not pros and not cons:
+                continue
+            key = (text, pros, cons)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            reply = fb.get("answer") or {}
+            product_data.reviews.append(
+                Review(
+                    text=text or None,
+                    pros=pros or None,
+                    cons=cons or None,
+                    rating=fb.get("productValuation"),
+                    date=fb.get("createdDate"),
+                    color=fb.get("color") or None,
+                    size=fb.get("size") or None,
+                    variant_article=str(fb.get("nmId")) if fb.get("nmId") else None,
+                    is_verified_purchase=bool(fb.get("matchingSize") or fb.get("matchingDescription")),
+                    seller_reply=(reply.get("text") if isinstance(reply, dict) else None),
+                )
+            )
+            collected += 1
+
+        product_data.reviews_collected = collected
+        product_data.reviews_complete = collected < self.max_reviews
+        logger.info(f"Собрано отзывов: {collected} (всего у товара {count})")
 
     async def _scrape_questions(self, page: Page, article: str, product_data: ProductData):
         """Собрать вопросы и ответы"""
@@ -309,8 +349,10 @@ class WildberriesScraper:
         logger.info(f"Загружаем вопросы: {url}")
 
         try:
-            await page.goto(url, wait_until='networkidle')
-            await page.wait_for_selector('.question, .qa-item', timeout=10000)
+            # networkidle на SPA WB не наступает — грузим domcontentloaded и ждём
+            # любой из селекторов вопросов подольше.
+            await page.goto(url, wait_until='domcontentloaded')
+            await page.wait_for_selector('.question, .qa-item', timeout=12000)
 
             questions_collected = 0
             seen_questions = set()

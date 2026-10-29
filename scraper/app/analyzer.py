@@ -227,7 +227,47 @@ class Analyzer:
         if product_data.article not in post_text:
             post_text += f"\n\n🛍 Артикул WB: {product_data.article}"
 
+        # Приводим markdown к Telegram-HTML. n8n отправляет пост с parse_mode=HTML,
+        # потому что legacy Markdown не понимает **жирный** и печатает звёздочки
+        # как есть, а MarkdownV2 требует экранировать почти всю пунктуацию.
+        post_text = self._to_telegram_html(post_text)
+
         return post_text
+
+    def _to_telegram_html(self, text: str) -> str:
+        """Сконвертировать простой markdown из LLM в HTML, понятный Telegram.
+
+        Поддерживаем только то, что реально генерирует промпт: **жирный**,
+        `код`, заголовок и списки. Всё остальное экранируем, иначе Telegram
+        вернёт «can't parse entities» на символе & или <.
+        """
+        import re
+
+        # Сначала экранируем HTML-спецсимволы в исходном тексте.
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        # **жирный** -> <b>жирный</b>
+        text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.S)
+        # одиночные *курсив* оставляем как есть — в постах почти не встречаются,
+        # но если встретятся, лучше не ломаться
+        text = re.sub(r"(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
+        # `код` -> <code>
+        text = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", text)
+        # Заголовок-строку без markdown делаем жирной, если это первая строка
+        lines = text.split("\n")
+        if lines and lines[0] and not lines[0].startswith("<"):
+            lines[0] = f"<b>{lines[0]}</b>"
+        # Разделители из дефисов -> визуальная линия, дефисы в списках -> буллиты
+        result = []
+        for line in lines:
+            stripped = line.strip()
+            if set(stripped) == {"-"} and len(stripped) >= 3:
+                result.append("━━━━━━━━━━━━━━━")
+            elif stripped.startswith("- "):
+                result.append("• " + stripped[2:])
+            else:
+                result.append(line)
+        return "\n".join(result)
 
     def _contains_wb_links(self, text: str) -> bool:
         """Проверить наличие ссылок на Wildberries"""

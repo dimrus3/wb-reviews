@@ -63,6 +63,11 @@ class ProductData(BaseModel):
     questions: List[Question] = Field(default_factory=list)
     questions_collected: int = 0
     questions_complete: bool = False
+    # Фото товара: og:image со страницы карточки (обычно .../images/big/1.webp).
+    # Telegram умеет скачивать картинку по URL сам, поэтому храним ссылку,
+    # а не файл — не нужен ни volume, ни base64 в БД.
+    image_url: Optional[str] = None
+    image_urls: List[str] = Field(default_factory=list)
     collected_at: datetime = Field(default_factory=datetime.utcnow)
     imtId: Optional[str] = None
 

@@ -63,3 +63,14 @@ backup_*.tar.gz
 
 # Docker
 docker-compose.override.yml
+
+# Локальные артефакты тестов
+ck.txt
+n8n_cookies*
+.env.bak*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+tunnel.log
+n8n_login.json
+*.tmp
