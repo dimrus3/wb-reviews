@@ -39,9 +39,16 @@ class Settings(BaseSettings):
 
     # Публикации
     publication_timezone: str = "Asia/Novosibirsk"
-    publication_times: list = ["11:00", "19:00"]
-    max_publications_per_day: int = 2
+    publication_times: list = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00",
+                               "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"]
+    max_publications_per_day: int = 15
     publications_paused: bool = False
+
+    # MAX (max.ru) — дублирование постов в мессенджер MAX
+    max_bot_token: str = Field(default="", description="Токен бота MAX от @MasterBot")
+    max_chat_id: str = Field(default="", description="ID канала/чата MAX (бот должен быть админом)")
+    max_api_base: str = Field(default="https://platform-api2.max.ru", description="Базовый URL Bot API MAX")
+    max_publish: bool = Field(default=True, description="Дублировать посты в MAX")
 
     # Безопасность
     allowed_domains: list = ["wildberries.ru", "www.wildberries.ru"]

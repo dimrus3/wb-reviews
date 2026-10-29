@@ -1,5 +1,6 @@
 {
   "name": "WB Reviews - Publisher",
+  "description": null,
   "nodes": [
     {
       "parameters": {
@@ -7,152 +8,397 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 11,19 * * *",
+              "expression": "0 9-21 * * *",
               "timezone": "Asia/Novosibirsk"
             }
           ]
         }
       },
-      "name": "Schedule Trigger",
+      "name": "Schedule 9-21 / 2h",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        224,
+        320
+      ],
+      "id": "b6ee4f5e-65a1-5524-9ba9-9db2ba51f2fe"
     },
     {
       "parameters": {
-        "url": "http://scraper:8000/publish",
         "method": "POST",
-        "jsonParameters": true,
-        "bodyParametersJson": "={{ JSON.stringify({ dry_run: false }) }}"
+        "url": "http://scraper:8000/publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dry_run: false }) }}",
+        "options": {
+          "response": {
+            "response": {}
+          }
+        }
       },
       "name": "Get Next Post",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 300]
+      "position": [
+        448,
+        320
+      ],
+      "id": "0b700c44-0491-5aec-bd85-6f327d133dd1"
     },
     {
       "parameters": {
         "conditions": {
-          "boolean": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.success }}",
-              "value2": true
+              "id": "f86a1f42-71eb-4341-9217-bd7799a0c0b4",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "b02f50d2-9b53-41f1-ae19-815de67eb300",
+              "leftValue": "={{ $json.dry_run }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
             }
-          ]
-        }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
       "name": "Has Post?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [650, 300]
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        320
+      ],
+      "id": "6124f121-60a5-555c-9e22-61957cf6cd3e"
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
-        "text": "={{ $json.text }}",
-        "additionalFields": {
-          "parse_mode": "Markdown",
-          "disable_web_page_preview": true
-        }
-      },
-      "name": "Publish to Channel",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 250],
-      "credentials": {
-        "telegramApi": {
-          "id": "1",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "url": "http://scraper:8000/publish/confirm",
         "method": "POST",
+        "url": "http://scraper:8000/publish/confirm",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             {
               "name": "post_id",
-              "value": "={{ $json.post_id }}"
+              "value": "={{ $('Get Next Post').item.json.post_id }}"
             },
             {
               "name": "product_id",
-              "value": "={{ $json.product_id }}"
+              "value": "={{ $('Get Next Post').item.json.product_id }}"
             },
             {
               "name": "channel_id",
-              "value": "={{ $json.chat.id }}"
+              "value": "={{ $env.TELEGRAM_CHANNEL_ID }}"
             },
             {
               "name": "message_id",
-              "value": "={{ $json.message_id }}"
+              "value": "={{ $('Pub: Send Photo').item.json.result?.message_id || $('Pub: Send Text').item.json.result?.message_id || '' }}"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "name": "Confirm Publication",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [1050, 250]
+      "position": [
+        1104,
+        128
+      ],
+      "id": "a54ec5a2-8746-522d-9571-adc75979b525"
     },
     {
       "parameters": {
-        "url": "http://scraper:8000/publish/uncertain",
         "method": "POST",
+        "url": "http://scraper:8000/publish/uncertain",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             {
               "name": "post_id",
-              "value": "={{ $json.post_id }}"
+              "value": "={{ $('Get Next Post').item.json.post_id }}"
             },
             {
               "name": "product_id",
-              "value": "={{ $json.product_id }}"
+              "value": "={{ $('Get Next Post').item.json.product_id }}"
             },
             {
               "name": "error",
-              "value": "={{ $json.error }}"
+              "value": "={{ ($json.error && ($json.error.message || $json.error.description)) || 'send failed' }}"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "name": "Mark Uncertain",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [1050, 400]
+      "position": [
+        1104,
+        320
+      ],
+      "id": "5e746d99-224c-5cfe-a950-db539215005f"
     },
     {
       "parameters": {
         "chatId": "={{ $env.ALLOWED_USER_ID }}",
-        "text": "⚠️ Неопределённый результат публикации для товара {{ $json.article }}\n\nПроверьте канал вручную и при необходимости удалите дубликат."
+        "text": "⚠️ Не удалось опубликовать пост по артикулу {{ $('Get Next Post').item.json.article }}.\n\nПроверьте канал вручную: если пост всё же появился, удалите дубликат.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
       },
       "name": "Notify Owner",
       "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [1250, 400],
+      "typeVersion": 1.2,
+      "position": [
+        1328,
+        320
+      ],
+      "id": "d4f51941-b95d-5a01-bf32-574e6c7a7a22",
+      "webhookId": "b86e505c-0569-4e5e-a34a-788823fdc5ea",
       "credentials": {
         "telegramApi": {
-          "id": "1",
+          "id": "9hvA7Tk3lvUpnZ9y",
           "name": "Telegram Bot"
         }
       }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Pub-ok-1",
+              "leftValue": "={{ $('Has Post?').item.json.success }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Pub: Published?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        872,
+        470
+      ],
+      "id": "Pub-ok-1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst p = $input.first().json;\nconst text = p.text || '';\nconst fits = text.length < 950;\nreturn [{ json: {\n  post_id: p.post_id, product_id: p.product_id, article: p.article,\n  text: text, fits: fits, caption: fits ? text : ''\n} }];\n"
+      },
+      "name": "Pub: Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        470
+      ],
+      "id": "Pub-prep-1"
+    },
+    {
+      "parameters": {
+        "url": "=http://scraper:8000/products/{{ $('Has Post?').item.json.product_id }}/image.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "name": "Pub: Get Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1272,
+        470
+      ],
+      "id": "Pub-img-1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Pub-imgok-1",
+              "leftValue": "={{ !!$binary.data }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Pub: Image OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        470
+      ],
+      "id": "Pub-imgok-1"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendPhoto",
+        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "={{ $('Pub: Prepare').item.json.caption }}",
+          "parse_mode": "HTML"
+        }
+      },
+      "name": "Pub: Send Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1672,
+        390
+      ],
+      "id": "Pub-photo-1",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "129fe1ce-dd86-40a2-9db7-268270d5aacc"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Pub-fits-1",
+              "leftValue": "={{ $('Pub: Prepare').item.json.fits }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Pub: Fits?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1872,
+        390
+      ],
+      "id": "Pub-fits-1"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
+        "text": "={{ $('Pub: Prepare').item.json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "name": "Pub: Send Text",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1872,
+        590
+      ],
+      "id": "Pub-rest-1",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "a9ea6b2b-79e0-47f9-a918-ddb01cad1aa5"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/publish/max",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post_id",
+              "value": "={{ $('Get Next Post').item.json.post_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Publish to MAX",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1328,
+        328
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
+      "id": "max-pub-1",
+      "notes": "Дублирование поста в MAX (max.ru). Ошибка MAX не блокирует публикацию в Telegram."
     }
   ],
   "connections": {
-    "Schedule Trigger": {
-      "main": [
-        [
-          {
-            "node": "Get Next Post",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Get Next Post": {
       "main": [
         [
@@ -168,14 +414,106 @@
       "main": [
         [
           {
-            "node": "Publish to Channel",
+            "node": "Pub: Published?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Publish to Channel": {
+    "Mark Uncertain": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Published?": {
+      "main": [
+        [
+          {
+            "node": "Pub: Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Pub: Prepare": {
+      "main": [
+        [
+          {
+            "node": "Pub: Get Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Get Image": {
+      "main": [
+        [
+          {
+            "node": "Pub: Image OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Image OK?": {
+      "main": [
+        [
+          {
+            "node": "Pub: Send Photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pub: Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Send Photo": {
+      "main": [
+        [
+          {
+            "node": "Pub: Fits?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Fits?": {
+      "main": [
+        [
+          {
+            "node": "Confirm Publication",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pub: Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub: Send Text": {
       "main": [
         [
           {
@@ -185,10 +523,43 @@
           }
         ]
       ]
+    },
+    "Schedule 9-21 / 2h": {
+      "main": [
+        [
+          {
+            "node": "Get Next Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Publication": {
+      "main": [
+        [
+          {
+            "node": "Publish to MAX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "Mark Uncertain"
-  }
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Schedule 11:00 / 19:00": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "pinData": {}
 }

@@ -291,6 +291,17 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_post(self, post_id: int) -> Optional[Dict[str, Any]]:
+        """Получить пост по id (для дублирования в MAX и ручных проверок)."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT p.*, pr.article FROM posts p
+                   JOIN products pr ON p.product_id = pr.id
+                   WHERE p.id = ?""",
+                (post_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
     def approve_post(self, post_id: int):
         """Одобрить пост, сняв одобрение с остальных версий того же товара.
 

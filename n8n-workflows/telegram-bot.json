@@ -1,82 +1,403 @@
 {
-  "name": "WB Reviews - Telegram Bot",
+  "name": "WB Reviews - Bot",
+  "description": null,
   "nodes": [
     {
-      "parameters": {},
-      "name": "Webhook Telegram",
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "name": "TelegramUpdate",
       "type": "n8n-nodes-base.telegramTrigger",
-      "typeVersion": 1,
-      "position": [250, 300],
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        420
+      ],
+      "id": "9802b6a9-f4cd-5bd2-b73b-76485b406fdb",
       "credentials": {
         "telegramApi": {
-          "id": "1",
+          "id": "9hvA7Tk3lvUpnZ9y",
           "name": "Telegram Bot"
         }
-      }
+      },
+      "webhookId": "ea9f60ae-c2e9-48bf-aa0e-8bf729ddcdee"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Приводим апдейт Telegram к плоскому item с полем action —\n// дальше маршрутизация цепочкой IF (Switch v1 в n8n ненадёжен по параметрам).\nconst out = [];\nfor (const item of $input.all()) {\n  const u = item.json || {};\n  const cb = u.callback_query;\n  const msg = u.message || u.edited_message;\n\n  if (cb) {\n    const data = cb.data || '';\n    let action = 'unknown';\n    let productId = null;\n    if (data.startsWith('approve_')) { action = 'approve'; productId = parseInt(data.slice(8), 10); }\n    else if (data.startsWith('skip_')) { action = 'skip'; productId = parseInt(data.slice(5), 10); }\n    else if (data.startsWith('revise_')) { action = 'revise_ask'; productId = parseInt(data.slice(7), 10); }\n    out.push({ json: {\n      kind: 'callback', action, product_id: productId,\n      chat_id: cb.message && cb.message.chat ? cb.message.chat.id : null,\n      message_id: cb.message ? cb.message.message_id : null,\n      user_id: cb.from ? cb.from.id : null,\n      text: '', reply_text: '', callback_id: cb.id || null\n    }});\n    continue;\n  }\n\n  if (msg) {\n    const text = (msg.text || '').trim();\n    const replyText = msg.reply_to_message ? (msg.reply_to_message.text || '') : '';\n    let action = 'unknown';\n    if (replyText.indexOf('Замечание для переделки поста #') !== -1) action = 'revise_apply';\n    else if (/^\\/add( |$)/.test(text)) action = 'add';\n    else if (text === '/queue' || text === '/queue@' + '') action = 'queue';\n    else if (text.startsWith('/queue')) action = 'queue';\n    else if (text.startsWith('/status')) action = 'status';\n    else if (text.startsWith('/pause')) action = 'pause';\n    else if (text.startsWith('/resume')) action = 'resume';\n\n    // /add@MyBot 123 — отрезаем суффикс команды с именем бота\n    const addArg = text.replace(/^\\/add(@\\S+)?\\s*/, '').trim();\n    const m = replyText.match(/#(\\d+)/);\n\n    out.push({ json: {\n      kind: 'message', action, text, add_arg: addArg,\n      chat_id: msg.chat ? msg.chat.id : null,\n      user_id: msg.from ? msg.from.id : null,\n      message_id: msg.message_id,\n      reply_text: replyText,\n      reply_product_id: m ? parseInt(m[1], 10) : null\n    }});\n  }\n}\nreturn out;\n"
+      },
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        420
+      ],
+      "id": "62e06348-d86d-5927-b27b-0e0aa56233c5"
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.message.text }}",
-              "operation": "startsWith",
-              "value2": "/add"
+              "id": "590e5c3f-67ce-438d-ac1b-383b2f633df7",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
-      "name": "Command: /add",
+      "name": "Action: Approve",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [450, 200]
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        100
+      ],
+      "id": "90616c7a-0e29-5cae-b59e-4eabcc97026f"
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.message.text }}",
-              "operation": "equals",
-              "value2": "/queue"
+              "id": "26db3dbc-911a-417a-bea7-24d6228e917c",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "skip",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
-      "name": "Command: /queue",
+      "name": "Action: Skip",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [450, 350]
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        240
+      ],
+      "id": "9f0b5a7d-ae55-536b-b057-a6863c17f1c2"
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.message.text }}",
-              "operation": "equals",
-              "value2": "/status"
+              "id": "30867e7b-ec5c-4a13-a47f-96d7af5bbdb6",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "revise_ask",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Revise ask",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        380
+      ],
+      "id": "eb9c77c5-9ad1-5665-8a4d-71219af51085"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0f31ec57-5a43-435d-b13e-f427c561c1aa",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "revise_apply",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Revise apply",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        520
+      ],
+      "id": "cfa1c469-0c93-58a7-bfcf-5cf060674ccc"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c77c3269-2390-4e0d-85f7-452bc53e1181",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "add",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Add",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        660
+      ],
+      "id": "2a9ce272-4586-54f7-909c-f41b8fd6c7f9"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1a069eee-a5c4-4025-9a6e-c2740b53e194",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "queue",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Queue",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        800
+      ],
+      "id": "207a65a3-0ce4-5253-b309-6614083cd045"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d895c4c3-c88d-4673-bcbc-64915d0fc5ad",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "status",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        940
+      ],
+      "id": "1003854d-b7c8-592a-9428-d9c892ee4051"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4dcd8b77-59ca-4121-81b9-671c466e3bde",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "pause",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Pause",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        1080
+      ],
+      "id": "3ddb6183-7d18-529f-b32c-ac83235018bf"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "852b1f5e-319d-4aa5-91e2-a74482d4d63c",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "resume",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Action: Resume",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        1220
+      ],
+      "id": "33086c08-0e94-599c-b30c-09e69317911a"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/approve",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ product_id: $json.product_id }) }}"
+      },
+      "name": "API Approve",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        900,
+        100
+      ],
+      "id": "2de12ef2-82cf-5d2e-a20e-9c3eda49e1c8"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/skip",
+        "method": "POST",
+        "options": {},
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "product_id",
+              "value": "={{ $json.product_id }}"
             }
           ]
         }
       },
-      "name": "Command: /status",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [450, 500]
+      "name": "API Skip",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        900,
+        240
+      ],
+      "id": "17c82c59-834d-5b86-bd48-6982a86aeddd"
     },
     {
       "parameters": {
         "url": "http://scraper:8000/products/add",
         "method": "POST",
-        "jsonParameters": true,
-        "options": {},
-        "bodyParametersJson": "={{ JSON.stringify({\n  \"input\": $json.message.text.replace('/add ', '').trim(),\n  \"user_id\": $json.message.from.id\n}) }}"
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: $json.add_arg, user_id: $json.user_id }) }}"
       },
-      "name": "Add Product API",
+      "name": "API Add",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [650, 200]
+      "position": [
+        900,
+        660
+      ],
+      "id": "8e76f726-7ef9-5d48-ba50-5556207d5c21"
     },
     {
       "parameters": {
@@ -84,10 +405,14 @@
         "method": "GET",
         "options": {}
       },
-      "name": "Queue Status API",
+      "name": "API Queue",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [650, 350]
+      "position": [
+        900,
+        800
+      ],
+      "id": "aef7b658-d958-5a9d-bf35-62b997948ea5"
     },
     {
       "parameters": {
@@ -95,277 +420,786 @@
         "method": "GET",
         "options": {}
       },
-      "name": "System Status API",
+      "name": "API Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [650, 500]
-    },
-    {
-      "parameters": {
-        "chatId": "={{ $json.message.chat.id }}",
-        "text": "={{ $json.success ? '✅ ' + $json.message : '❌ ' + $json.message }}"
-      },
-      "name": "Reply Add Result",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 200],
-      "credentials": {
-        "telegramApi": {
-          "id": "1",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "chatId": "={{ $json.message.chat.id }}",
-        "text": "📊 *Статус очереди*\n\n📥 В очереди: {{ $json.queued }}\n🔄 Собирается: {{ $json.collecting }}\n🧠 Анализируется: {{ $json.analyzing }}\n⏳ Ожидает одобрения: {{ $json.awaiting_approval }}\n✅ Одобрено: {{ $json.approved }}\n❌ Ошибки: {{ $json.failed }}\n\n📦 Всего: {{ $json.total }}",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
-      },
-      "name": "Reply Queue Status",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 350],
-      "credentials": {
-        "telegramApi": {
-          "id": "1",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "chatId": "={{ $json.message.chat.id }}",
-        "text": "⚙️ *Статус системы*\n\n{{ $json.publications_paused ? '⏸ Публикации приостановлены' : '▶️ Публикации активны' }}\n\n📅 Сегодня опубликовано: {{ $json.today_published }}/{{ $json.queue.total }}\n\n⏰ Следующие публикации:\n{{ $json.next_publication_slots.join('\\n') }}\n\n📊 *Очередь:*\n⏳ Ожидает одобрения: {{ $json.queue.awaiting_approval }}\n✅ Одобрено: {{ $json.queue.approved }}",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
-      },
-      "name": "Reply System Status",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 500],
-      "credentials": {
-        "telegramApi": {
-          "id": "1",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.message.text }}",
-              "operation": "equals",
-              "value2": "/pause"
-            }
-          ]
-        }
-      },
-      "name": "Command: /pause",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [450, 650]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.message.text }}",
-              "operation": "equals",
-              "value2": "/resume"
-            }
-          ]
-        }
-      },
-      "name": "Command: /resume",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [450, 800]
+      "position": [
+        900,
+        940
+      ],
+      "id": "e9d240e0-155e-5373-99f3-e076c0d0533f"
     },
     {
       "parameters": {
         "url": "http://scraper:8000/publications/pause",
         "method": "POST",
-        "jsonParameters": true,
-        "bodyParametersJson": "={{ JSON.stringify({ \"user_id\": $json.message.from.id }) }}"
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ user_id: $json.user_id }) }}"
       },
-      "name": "Pause Publications",
+      "name": "API Pause",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [650, 650]
+      "position": [
+        900,
+        1080
+      ],
+      "id": "679b57ad-638d-59ab-8a05-e1167c7353df"
     },
     {
       "parameters": {
         "url": "http://scraper:8000/publications/resume",
         "method": "POST",
-        "jsonParameters": true,
-        "bodyParametersJson": "={{ JSON.stringify({ \"user_id\": $json.message.from.id }) }}"
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ user_id: $json.user_id }) }}"
       },
-      "name": "Resume Publications",
+      "name": "API Resume",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [650, 800]
+      "position": [
+        900,
+        1220
+      ],
+      "id": "8ac65467-2836-5e22-8fdb-d4b646b88a3a"
     },
     {
       "parameters": {
-        "chatId": "={{ $json.message.chat.id }}",
-        "text": "⏸ Публикации приостановлены"
+        "url": "http://scraper:8000/posts/revise",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ product_id: $json.reply_product_id, revision_note: $json.text }) }}"
+      },
+      "name": "API Revise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        900,
+        520
+      ],
+      "id": "942499d8-64a3-5601-a7b8-bbaca7b06f68"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "✅ Пост одобрен и уйдёт в канал в ближайший слот публикации.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Approved",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        100
+      ],
+      "id": "586381c3-e492-5d4c-946d-65a2552317f2",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "17b507ee-27e5-473d-b8ac-ed2a0fd90602"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "⏭ Товар пропущен.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Skipped",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        240
+      ],
+      "id": "13b396f4-78c0-5ff9-a9d2-6fdf126227dc",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "4c82e5c9-8f9d-45ce-8466-44349cf49f2f"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "✏️ Замечание для переделки поста #{{ $json.product_id }}\n\nОтветьте (Reply) на это сообщение и напишите, что поправить в посте.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Ask Revision Note",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        380
+      ],
+      "id": "5b0daa9e-b4c8-5f49-9fa6-110c6c190786",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "2f32972a-2ac7-461c-ba40-c448e1622a35"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "✏️ Пост отправлен на переделку. Новая версия придёт на одобрение в течение пары минут.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Revised",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        520
+      ],
+      "id": "3820e6ad-1880-532e-8e18-1c1f19996393",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "09ba3039-7870-4302-9676-9ab91d247515"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "={{ $json.success ? '✅ ' + $json.message : '❌ ' + $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Add",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        660
+      ],
+      "id": "5794fcb8-6c87-58aa-b41c-a7d35118f51a",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "c0b0f084-f540-497d-be05-23c8debbd800"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "📊 *Статус очереди*\n\n📥 В очереди: {{ $json.queued }}\n🔄 Собирается: {{ $json.collecting }}\n🧠 Анализируется: {{ $json.analyzing }}\n⏳ Ожидает одобрения: {{ $json.awaiting_approval }}\n✅ Одобрено: {{ $json.approved }}\n❌ Ошибки: {{ $json.failed }}\n\n📦 Всего: {{ $json.total }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Queue",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        800
+      ],
+      "id": "54578a2e-7b98-5848-b70a-50fbf0a78998",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "e98e3cbe-4b7a-493f-87f7-8472e3f2d3bd"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "⚙️ *Статус системы*\n\n{{ $json.publications_paused ? '⏸ Публикации приостановлены' : '▶️ Публикации активны' }}\n\n📅 Опубликовано сегодня: {{ $json.today_published }}\n\n⏰ Следующие слоты:\n{{ $json.next_publication_slots.join('\\n') }}\n\n📊 Очередь: ожидают одобрения {{ $json.queue.awaiting_approval }}, одобрено {{ $json.queue.approved }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Reply Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        940
+      ],
+      "id": "e16614cf-48b8-5c54-b6cd-e373c1d8d6e2",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "b0956f3f-048c-42ba-8bf4-7befa2806c89"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "⏸ Публикации приостановлены.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
       },
       "name": "Reply Paused",
       "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 650],
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        1080
+      ],
+      "id": "6f2b04c1-48e9-5f17-be08-2f2ee221a71c",
       "credentials": {
         "telegramApi": {
-          "id": "1",
+          "id": "9hvA7Tk3lvUpnZ9y",
           "name": "Telegram Bot"
         }
-      }
+      },
+      "webhookId": "3db47b9d-39ca-4ee6-8b38-fbc891aef4fc"
     },
     {
       "parameters": {
-        "chatId": "={{ $json.message.chat.id }}",
-        "text": "▶️ Публикации возобновлены"
+        "chatId": "={{ $('Normalize').item.json.chat_id }}",
+        "text": "▶️ Публикации возобновлены.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
       },
       "name": "Reply Resumed",
       "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [850, 800],
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        1220
+      ],
+      "id": "b46a022c-cd70-59ea-b767-ca4730f9bb1d",
       "credentials": {
         "telegramApi": {
-          "id": "1",
+          "id": "9hvA7Tk3lvUpnZ9y",
           "name": "Telegram Bot"
         }
-      }
+      },
+      "webhookId": "ea618f80-78ed-4941-adf1-80b11d8be5da"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dry_run: false }) }}",
+        "options": {}
+      },
+      "name": "Publish Now",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        100
+      ],
+      "id": "publish-now-node-1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/publish/confirm",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post_id",
+              "value": "={{ $('Publish Now').item.json.post_id }}"
+            },
+            {
+              "name": "product_id",
+              "value": "={{ $('Publish Now').item.json.product_id }}"
+            },
+            {
+              "name": "channel_id",
+              "value": "={{ $env.TELEGRAM_CHANNEL_ID }}"
+            },
+            {
+              "name": "message_id",
+              "value": "={{ $('Now: Send Photo').item.json.result?.message_id || $('Now: Send Text').item.json.result?.message_id || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Confirm Publish Now",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        100
+      ],
+      "id": "pub-confirm-node-1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Now-ok-1",
+              "leftValue": "={{ $('Publish Now').item.json.success }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Now: Published?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        250
+      ],
+      "id": "Now-ok-1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst p = $input.first().json;\nconst text = p.text || '';\nconst fits = text.length < 950;\nreturn [{ json: {\n  post_id: p.post_id, product_id: p.product_id, article: p.article,\n  text: text, fits: fits, caption: fits ? text : ''\n} }];\n"
+      },
+      "name": "Now: Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        250
+      ],
+      "id": "Now-prep-1"
+    },
+    {
+      "parameters": {
+        "url": "=http://scraper:8000/products/{{ $('Publish Now').item.json.product_id }}/image.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "name": "Now: Get Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        250
+      ],
+      "id": "Now-img-1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Now-imgok-1",
+              "leftValue": "={{ !!$binary.data }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Now: Image OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        250
+      ],
+      "id": "Now-imgok-1"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendPhoto",
+        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "={{ $('Now: Prepare').item.json.caption }}",
+          "parse_mode": "HTML"
+        }
+      },
+      "name": "Now: Send Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2100,
+        170
+      ],
+      "id": "Now-photo-1",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "83c34a14-d47c-4ae1-8d79-f056928de0bd"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Now-fits-1",
+              "leftValue": "={{ $('Now: Prepare').item.json.fits }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Now: Fits?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        170
+      ],
+      "id": "Now-fits-1"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHANNEL_ID }}",
+        "text": "={{ $('Now: Prepare').item.json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "name": "Now: Send Text",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2300,
+        370
+      ],
+      "id": "Now-rest-1",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "43f85ef1-95b7-4b2e-9166-51a0568ae029"
     }
   ],
   "connections": {
-    "Webhook Telegram": {
+    "TelegramUpdate": {
       "main": [
         [
           {
-            "node": "Command: /add",
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Action: Approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Approve": {
+      "main": [
+        [
+          {
+            "node": "API Approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Skip": {
+      "main": [
+        [
+          {
+            "node": "API Skip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Revise ask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Revise ask": {
+      "main": [
+        [
+          {
+            "node": "Ask Revision Note",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Revise apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Revise apply": {
+      "main": [
+        [
+          {
+            "node": "API Revise",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Add",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Add": {
+      "main": [
+        [
+          {
+            "node": "API Add",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Queue": {
+      "main": [
+        [
+          {
+            "node": "API Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Status": {
+      "main": [
+        [
+          {
+            "node": "API Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action: Pause": {
+      "main": [
+        [
+          {
+            "node": "API Pause",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Action: Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Approve": {
+      "main": [
+        [
+          {
+            "node": "Reply Approved",
             "type": "main",
             "index": 0
           },
           {
-            "node": "Command: /queue",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Command: /status",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Command: /pause",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Command: /resume",
+            "node": "Publish Now",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Command: /add": {
+    "API Skip": {
       "main": [
         [
           {
-            "node": "Add Product API",
+            "node": "Reply Skipped",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Command: /queue": {
+    "API Revise": {
       "main": [
         [
           {
-            "node": "Queue Status API",
+            "node": "Reply Revised",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Command: /status": {
+    "API Add": {
       "main": [
         [
           {
-            "node": "System Status API",
+            "node": "Reply Add",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Add Product API": {
+    "API Queue": {
       "main": [
         [
           {
-            "node": "Reply Add Result",
+            "node": "Reply Queue",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Queue Status API": {
+    "API Status": {
       "main": [
         [
           {
-            "node": "Reply Queue Status",
+            "node": "Reply Status",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "System Status API": {
-      "main": [
-        [
-          {
-            "node": "Reply System Status",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Command: /pause": {
-      "main": [
-        [
-          {
-            "node": "Pause Publications",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Command: /resume": {
-      "main": [
-        [
-          {
-            "node": "Resume Publications",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Pause Publications": {
+    "API Pause": {
       "main": [
         [
           {
@@ -376,7 +1210,18 @@
         ]
       ]
     },
-    "Resume Publications": {
+    "Action: Resume": {
+      "main": [
+        [
+          {
+            "node": "API Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Resume": {
       "main": [
         [
           {
@@ -386,6 +1231,114 @@
           }
         ]
       ]
+    },
+    "Publish Now": {
+      "main": [
+        [
+          {
+            "node": "Now: Published?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Published?": {
+      "main": [
+        [
+          {
+            "node": "Now: Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Now: Prepare": {
+      "main": [
+        [
+          {
+            "node": "Now: Get Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Get Image": {
+      "main": [
+        [
+          {
+            "node": "Now: Image OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Image OK?": {
+      "main": [
+        [
+          {
+            "node": "Now: Send Photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Now: Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Send Photo": {
+      "main": [
+        [
+          {
+            "node": "Now: Fits?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Fits?": {
+      "main": [
+        [
+          {
+            "node": "Confirm Publish Now",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Now: Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Now: Send Text": {
+      "main": [
+        [
+          {
+            "node": "Confirm Publish Now",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
-  }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": null
 }

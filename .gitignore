@@ -74,3 +74,11 @@ n8n_cookies*
 tunnel.log
 n8n_login.json
 *.tmp
+
+# Секреты и выгрузки n8n (не коммитим)
+deploy/credentials.json
+login_resp.json
+wfs.json
+
+# Локальные выгрузки n8n
+deploy/

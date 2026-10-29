@@ -1,5 +1,6 @@
 {
   "name": "WB Reviews - Post Approval",
+  "description": null,
   "nodes": [
     {
       "parameters": {
@@ -12,104 +13,348 @@
           ]
         }
       },
-      "name": "Check Every 5 Minutes",
+      "name": "Every 5 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        220,
+        320
+      ],
+      "id": "4ccb1629-f13e-5d8e-be16-b5f23b2c77f0"
     },
     {
       "parameters": {
-        "url": "http://scraper:8000/posts/awaiting-approval",
+        "url": "http://scraper:8000/posts/awaiting-approval?unnotified=true",
         "method": "GET",
         "options": {}
       },
-      "name": "Get Awaiting Approval",
+      "name": "Get Awaiting",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 300]
+      "position": [
+        440,
+        320
+      ],
+      "id": "f1a5b886-31de-508a-ab05-6e90d0ebdf37"
     },
     {
       "parameters": {
         "conditions": {
-          "number": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.posts.length }}",
-              "operation": "larger",
-              "value2": 0
+              "id": "510eeab2-2590-41d3-ae6e-63519db35760",
+              "leftValue": "={{ $json.posts.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
             }
-          ]
+          ],
+          "combinator": "and"
         }
       },
       "name": "Has Posts?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [650, 300]
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        320
+      ],
+      "id": "fb5705ba-9932-5d2b-af13-bf9e726260b5"
     },
     {
       "parameters": {
-        "fieldToSplitOut": "posts",
-        "options": {}
+        "fieldToSplitOut": "posts"
       },
       "name": "Split Posts",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
-      "position": [850, 250]
+      "position": [
+        880,
+        320
+      ],
+      "id": "480d2023-8534-5ca9-a3cf-093ce5abd25a"
+    },
+    {
+      "parameters": {
+        "url": "http://scraper:8000/posts/notified",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ post_ids: [$('Split Posts').item.json.post_id] }) }}"
+      },
+      "name": "Mark Notified",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        320
+      ],
+      "id": "05e3e1d7-7c43-5d1e-b714-e8c6f13eaed3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e895691c-8e10-4f1f-9404-98cb65e3291c",
+              "leftValue": "={{ $json.image_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Has Photo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        920,
+        320
+      ],
+      "id": "a41a0fdf-9905-4a09-a39e-013784b4cb6c"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendPhoto",
+        "chatId": "={{ $env.ALLOWED_USER_ID }}",
+        "additionalFields": {
+          "caption": "={{ $json.caption }}",
+          "parse_mode": "HTML"
+        },
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Одобрить",
+                    "additionalFields": {
+                      "callback_data": "=approve_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✏️ Переделать",
+                    "additionalFields": {
+                      "callback_data": "=revise_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "⏭ Пропустить",
+                    "additionalFields": {
+                      "callback_data": "=skip_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "binaryData": true,
+        "binaryPropertyName": "data"
+      },
+      "name": "Send Photo To Owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        180
+      ],
+      "id": "b8defc13-7ddc-44e4-966e-143a835b34c6",
+      "credentials": {
+        "telegramApi": {
+          "id": "9hvA7Tk3lvUpnZ9y",
+          "name": "Telegram Bot"
+        }
+      },
+      "webhookId": "733646c3-e15f-48ad-83c3-79a1a1c8532b"
     },
     {
       "parameters": {
         "chatId": "={{ $env.ALLOWED_USER_ID }}",
-        "text": "📝 *Новый пост готов для одобрения*\n\n*Артикул WB:* {{ $json.article }}\n*Версия:* {{ $json.version }}\n\n─────────────────\n\n{{ $json.text }}\n\n─────────────────",
+        "text": "=📝 <b>Новый пост на одобрение</b>\n\n<b>Артикул WB:</b> {{ $('Split Posts').item.json.article }}\n<b>Версия:</b> {{ $('Split Posts').item.json.version }}\n\n━━━━━━━━━━━━━━━\n\n{{ $('Split Posts').item.json.text }}\n\n━━━━━━━━━━━━━━━",
         "additionalFields": {
-          "parse_mode": "Markdown",
-          "reply_markup": {
-            "inline_keyboard": [
-              [
-                {
-                  "text": "✅ Одобрить",
-                  "callback_data": "approve_{{ $json.product_id }}"
-                }
-              ],
-              [
-                {
-                  "text": "✏️ Переделать",
-                  "callback_data": "revise_{{ $json.product_id }}"
-                }
-              ],
-              [
-                {
-                  "text": "⏭ Пропустить",
-                  "callback_data": "skip_{{ $json.product_id }}"
-                }
-              ]
-            ]
-          }
+          "parse_mode": "HTML"
+        },
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Одобрить",
+                    "additionalFields": {
+                      "callback_data": "=approve_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✏️ Переделать",
+                    "additionalFields": {
+                      "callback_data": "=revise_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "⏭ Пропустить",
+                    "additionalFields": {
+                      "callback_data": "=skip_{{ $('Split Posts').item.json.product_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         }
       },
-      "name": "Send to Owner",
+      "name": "Send Text To Owner",
       "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1,
-      "position": [1050, 250],
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        460
+      ],
+      "id": "589d761b-73a2-4adc-b311-4fe44fd97a80",
       "credentials": {
         "telegramApi": {
-          "id": "1",
+          "id": "9hvA7Tk3lvUpnZ9y",
           "name": "Telegram Bot"
         }
-      }
+      },
+      "webhookId": "10c5fc6f-00eb-4e6a-88ce-c2992ebf849c"
+    },
+    {
+      "parameters": {
+        "url": "=http://scraper:8000/products/{{ $json.product_id }}/image.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "name": "Get Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        40
+      ],
+      "id": "get-image-node-0001"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fits-cond-1",
+              "leftValue": "={{ $('Prepare Message').item.json.fits }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Fits Caption?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        180
+      ],
+      "id": "fits-caption-node-1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst s = $('Split Posts').item.json;\nconst header = '📝 <b>Новый пост на одобрение</b>\\n\\n'\n  + '<b>Артикул WB:</b> ' + s.article + '\\n'\n  + '<b>Версия:</b> ' + s.version + '\\n\\n'\n  + '━━━━━━━━━━━━━━━\\n\\n';\nconst text = s.text || '';\nconst fits = text.length < 850;\nreturn [{ json: { ...s, caption: header + (fits ? text : ''), fits: fits } }];\n"
+      },
+      "name": "Prepare Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        180
+      ],
+      "id": "prepare-message-node-1"
     }
   ],
   "connections": {
-    "Check Every 5 Minutes": {
+    "Every 5 Minutes": {
       "main": [
         [
           {
-            "node": "Get Awaiting Approval",
+            "node": "Get Awaiting",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Get Awaiting Approval": {
+    "Get Awaiting": {
       "main": [
         [
           {
@@ -135,12 +380,106 @@
       "main": [
         [
           {
-            "node": "Send to Owner",
+            "node": "Prepare Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Photo?": {
+      "main": [
+        [
+          {
+            "node": "Get Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Text To Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Photo To Owner": {
+      "main": [
+        [
+          {
+            "node": "Fits Caption?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Text To Owner": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Image": {
+      "main": [
+        [
+          {
+            "node": "Send Photo To Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fits Caption?": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Text To Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Message": {
+      "main": [
+        [
+          {
+            "node": "Has Photo?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     }
-  }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 5 Minutes": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "pinData": null
 }

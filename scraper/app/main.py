@@ -506,6 +506,121 @@ async def mark_publication_uncertain(post_id: int, product_id: int, error: str):
     }
 
 
+# ---------------------------------------------------------------- MAX (max.ru)
+def _max_client():
+    """Клиент MAX из настроек. None, если дублирование выключено или не настроено."""
+    from .max_client import MaxClient
+
+    if not settings.max_publish:
+        return None
+    client = MaxClient(
+        token=settings.max_bot_token,
+        chat_id=settings.max_chat_id,
+        base_url=settings.max_api_base,
+    )
+    return client if client.enabled else None
+
+
+async def _product_image_bytes(product_id: int) -> Optional[bytes]:
+    """JPEG товара из кэша (или скачать у WB). None, если фото нет."""
+    import io
+
+    from PIL import Image
+
+    cache_dir = os.getenv("IMAGE_CACHE_DIR", "/app/data")
+    cache_path = os.path.join(cache_dir, f"img_{product_id}.jpg")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                return f.read()
+        except Exception:
+            pass
+
+    data = db.get_product_data(product_id)
+    if not data or not data.image_url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(
+                data.image_url,
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.wildberries.ru/"},
+            )
+            resp.raise_for_status()
+            raw = resp.content
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img.thumbnail((1000, 1000))
+        os.makedirs(cache_dir, exist_ok=True)
+        img.save(cache_path, "JPEG", quality=88)
+        with open(cache_path, "rb") as f:
+            return f.read()
+    except Exception as e:
+        logger.warning(f"MAX: не удалось получить фото товара {product_id}: {e}")
+        return None
+
+
+@app.post("/publish/max")
+async def publish_to_max(post_id: int):
+    """Дублировать пост в MAX. Вызывается из n8n после публикации в Telegram.
+
+    Возвращает success=False вместо ошибки — MAX не должен ронять пайплайн.
+    """
+    client = _max_client()
+    if not client:
+        return {"success": False, "skipped": True, "message": "MAX не настроен (MAX_BOT_TOKEN/MAX_CHAT_ID)"}
+
+    post = db.get_post(post_id)
+    if not post:
+        return {"success": False, "message": f"Пост {post_id} не найден"}
+
+    image_bytes = await _product_image_bytes(post["product_id"])
+    result = await client.send_post(post.get("text") or "", image_bytes=image_bytes)
+
+    if result.get("success"):
+        logger.info(f"MAX: пост {post_id} отправлен в {settings.max_chat_id} (фото: {bool(image_bytes)})")
+    else:
+        logger.warning(f"MAX: пост {post_id} не отправлен: {result.get('error')}")
+
+    return {
+        "success": bool(result.get("success")),
+        "post_id": post_id,
+        "product_id": post["product_id"],
+        "article": post.get("article"),
+        "with_photo": bool(image_bytes),
+        "detail": result,
+    }
+
+
+@app.get("/max/me")
+async def max_me():
+    """Проверка токена MAX: GET /me."""
+    client = _max_client()
+    if not client:
+        return {"success": False, "message": "MAX не настроен (MAX_BOT_TOKEN/MAX_CHAT_ID)"}
+    return await client.me()
+
+
+@app.get("/max/chats")
+async def max_chats():
+    """Список чатов/каналов бота MAX — чтобы узнать chat_id канала."""
+    client = _max_client()
+    if not client:
+        return {"success": False, "message": "MAX не настроен (MAX_BOT_TOKEN/MAX_CHAT_ID)"}
+    chats = await client.chats()
+    return {
+        "success": True,
+        "count": len(chats),
+        "chats": [
+            {
+                "chat_id": c.get("chat_id"),
+                "type": c.get("type"),
+                "title": c.get("title"),
+                "status": c.get("status"),
+            }
+            for c in chats
+        ],
+    }
+
+
 async def process_product(product_id: int, article: str):
     """
     Полная обработка товара: сбор → анализ → генерация поста

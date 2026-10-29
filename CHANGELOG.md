@@ -1,5 +1,30 @@
 # Изменения
 
+## v1.2.0 — 29.10.2026
+
+Дублирование постов в мессенджер MAX и более частое расписание.
+
+### MAX (max.ru)
+- `scraper/app/max_client.py` — клиент Bot API: `send_text`, `send_photo`,
+  `send_post`, `me`, `chats`. База `https://platform-api2.max.ru`,
+  `Authorization: <raw token>` без `Bearer`.
+- Фото: `POST /uploads?type=image` → загрузка → `attachments[].payload.token`;
+  при `attachment.not.ready` до 4 повторов с растущей паузой.
+- Длинный текст не влезает в подпись к фото — остаток досылается отдельным
+  сообщением (лимит 4000 символов).
+- `POST /publish/max?post_id=N` — дублирование поста; ошибка MAX не роняет
+  публикацию в Telegram (`success=false` в ответе).
+- `GET /max/me`, `GET /max/chats` — проверка токена и поиск `chat_id` канала.
+- Новые настройки: `MAX_BOT_TOKEN`, `MAX_CHAT_ID`, `MAX_API_BASE`, `MAX_PUBLISH`.
+  Пустой токен или `chat_id` — дублирование тихо пропускается.
+- n8n `publisher.json`: узел `Publish to MAX` после `Confirm Publication`.
+
+### Расписание
+- Публикация: `0 9-21/2 * * *` (7 слотов: 09, 11, 13, 15, 17, 19, 21 по
+  Новосибирску) вместо 2 слотов 11:00 / 19:00.
+- `MAX_PUBLICATIONS_PER_DAY=10` — дневной предохранитель, учитывает и ручные
+  одобрения.
+
 ## v1.1.0 — 29.10.2026
 
 Скрапер и канал приведены к рабочему состоянию на реальных товарах WB.

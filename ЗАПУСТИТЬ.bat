@@ -72,11 +72,7 @@ set "URL="
 for /l %%i in (1,1,15) do (
     if not defined URL (
         timeout /t 4 /nobreak >nul
-        for /f "delims=" %%u in ('docker logs --tail 150 wb_reviews_tunnel 2^>^&1 ^| findstr /r /c:"trycloudflare.com"') do (
-            for %%a in (%%u) do (
-                echo %%a | findstr /r /c:"^https://.*trycloudflare.com$" >nul && set "URL=%%a"
-            )
-        )
+        for /f "usebackq delims=" %%u in (`powershell -NoProfile -Command "$t = docker logs --tail 200 wb_reviews_tunnel 2>&1 | Out-String; if ($t -match 'https://[a-z0-9-]+\.trycloudflare\.com') { $matches[0] }"`) do set "URL=%%u"
     )
 )
 
