@@ -375,6 +375,28 @@ async def get_awaiting_approval(unnotified: bool = False):
     return {"posts": posts}
 
 
+def _resolve_image_url(data) -> Optional[str]:
+    """Первый пригодный URL фото товара.
+
+    WB иногда отдаёт в og:image общую заглушку сайта
+    (//static-basket-01.wbbasket.ru/vol2/site/i/marketplace-og-win.jpg) —
+    без схемы, и это не фото товара. Тогда берём первое фото из галереи.
+    Ссылки вида //host/... дополняем https:.
+    """
+    if not data:
+        return None
+    for url in [data.image_url] + list(data.image_urls or []):
+        if not url:
+            continue
+        if url.startswith("//"):
+            url = "https:" + url
+        if "/site/i/" in url:  # заглушка WB, не фото товара
+            continue
+        if url.startswith(("http://", "https://")):
+            return url
+    return None
+
+
 @app.get("/products/{product_id}/image.jpg")
 async def product_image_jpg(product_id: int):
     """Отдать главное фото товара в JPEG.
@@ -388,7 +410,8 @@ async def product_image_jpg(product_id: int):
     from PIL import Image
 
     data = db.get_product_data(product_id)
-    if not data or not data.image_url:
+    image_url = _resolve_image_url(data)
+    if not image_url:
         raise HTTPException(status_code=404, detail="У товара нет фото")
 
     cache_dir = os.getenv("IMAGE_CACHE_DIR", "/app/data")
@@ -398,7 +421,7 @@ async def product_image_jpg(product_id: int):
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                 resp = await client.get(
-                    data.image_url,
+                    image_url,
                     headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.wildberries.ru/"},
                 )
                 resp.raise_for_status()
@@ -537,12 +560,13 @@ async def _product_image_bytes(product_id: int) -> Optional[bytes]:
             pass
 
     data = db.get_product_data(product_id)
-    if not data or not data.image_url:
+    image_url = _resolve_image_url(data)
+    if not image_url:
         return None
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(
-                data.image_url,
+                image_url,
                 headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.wildberries.ru/"},
             )
             resp.raise_for_status()
