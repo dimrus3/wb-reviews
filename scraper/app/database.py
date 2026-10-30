@@ -203,6 +203,21 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def claim_for_processing(self, product_id: int) -> bool:
+        """Атомарно перевести товар queued -> collecting.
+
+        Товар может одновременно попасть в фоновую задачу /products/add и в
+        queue_worker. Обрабатывает только тот, кто успел захватить, иначе
+        один артикул собирался и анализировался дважды (двойной расход LLM).
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE products SET status = ?, last_updated = CURRENT_TIMESTAMP
+                   WHERE id = ? AND status = ?""",
+                (ProductStatus.COLLECTING.value, product_id, ProductStatus.QUEUED.value)
+            )
+            return cursor.rowcount == 1
+
     def update_product_status(self, product_id: int, status: ProductStatus, error_message: Optional[str] = None):
         """Обновить статус товара"""
         with self.get_connection() as conn:
@@ -434,6 +449,15 @@ class Database:
                 failed=counts.get(ProductStatus.FAILED.value, 0),
                 total=sum(counts.values())
             )
+
+    def get_llm_requests_today(self) -> int:
+        """Сколько запросов к LLM сделано сегодня (та же таблица, что пишет increment)."""
+        today = date.today().isoformat()
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT count FROM llm_requests WHERE date = ?", (today,)
+            ).fetchone()
+            return row["count"] if row else 0
 
     def increment_llm_requests(self) -> int:
         """Увеличить счётчик запросов к LLM, вернуть текущее значение"""

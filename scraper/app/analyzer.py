@@ -20,11 +20,9 @@ class Analyzer:
 
     async def check_daily_limit(self, db) -> bool:
         """Проверить дневной лимит запросов"""
-        from datetime import date
-        today = date.today().isoformat()
-        count = db.get_system_state(f"llm_requests_{today}")
-        current = int(count) if count else 0
-        return current < self.settings.llm_daily_limit
+        # Раньше читался system_state["llm_requests_<дата>"], а счётчик пишется
+        # в таблицу llm_requests — проверка всегда видела 0 и лимит не срабатывал.
+        return db.get_llm_requests_today() < self.settings.llm_daily_limit
 
     async def increment_request_count(self, db):
         """Увеличить счётчик запросов"""

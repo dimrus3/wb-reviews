@@ -625,11 +625,16 @@ async def process_product(product_id: int, article: str):
     """
     Полная обработка товара: сбор → анализ → генерация поста
     """
+    # Захват queued -> collecting: если товар уже взял другой обработчик
+    # (queue_worker или фоновая задача /products/add) — выходим.
+    if not db.claim_for_processing(product_id):
+        logger.info(f"Товар {article} (ID: {product_id}) уже обрабатывается — пропуск")
+        return
+
     try:
         logger.info(f"Начинаем обработку товара {article} (ID: {product_id})")
 
         # 1. Сбор данных
-        db.update_product_status(product_id, ProductStatus.COLLECTING)
         product_data = await scraper.scrape_product(article)
         db.save_product_data(product_id, product_data)
         logger.info(f"Данные собраны для {article}")
