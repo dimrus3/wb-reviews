@@ -338,6 +338,40 @@ class Database:
                 (post_id,)
             )
 
+    def get_publications_on(self, utc_date: str) -> int:
+        """Успешные публикации за дату UTC (YYYY-MM-DD) — так же, как считает лимит."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM publications
+                   WHERE DATE(published_at) = ? AND status = 'success'""",
+                (utc_date,)
+            ).fetchone()
+            return row[0] if row else 0
+
+    def get_queue_snapshot(self) -> Dict[str, Any]:
+        """Сколько постов ждут одобрения и какие стоят в очереди на публикацию.
+
+        Порядок очереди совпадает с get_next_approved_post (по approved_at),
+        чтобы прогноз времени выхода сходился с тем, что реально опубликуется.
+        """
+        with self.get_connection() as conn:
+            awaiting = conn.execute(
+                "SELECT COUNT(*) FROM products WHERE status = ?",
+                (ProductStatus.AWAITING_APPROVAL.value,)
+            ).fetchone()[0]
+            queued = [r[0] for r in conn.execute(
+                """SELECT p.product_id FROM posts p
+                   JOIN products pr ON p.product_id = pr.id
+                   WHERE p.approved = 1
+                   AND p.published_at IS NULL
+                   AND pr.status = ?
+                   AND p.version = (SELECT MAX(p2.version) FROM posts p2
+                                    WHERE p2.product_id = p.product_id)
+                   ORDER BY p.approved_at ASC""",
+                (ProductStatus.APPROVED.value,)
+            )]
+            return {"awaiting": awaiting, "queued_product_ids": queued}
+
     def get_next_approved_post(self, claim: bool = True) -> Optional[Dict[str, Any]]:
         """
         Получить следующий одобренный пост для публикации

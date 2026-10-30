@@ -336,9 +336,13 @@ async def approve_post(request: ApproveRequest):
     db.approve_post(post["id"])
     db.update_product_status(request.product_id, ProductStatus.APPROVED)
 
+    queue = queue_info(request.product_id)
     return {
         "success": True,
-        "message": "Пост одобрен и готов к публикации"
+        "message": "Пост одобрен и готов к публикации",
+        "queue": queue,
+        # Готовая строка для ответа бота: n8n просто подставляет её в текст
+        "reply_text": queue["approve_line"],
     }
 
 
@@ -372,7 +376,114 @@ async def get_awaiting_approval(unnotified: bool = False):
     эндпоинт по расписанию и без фильтра присылает один пост повторно).
     """
     posts = db.get_awaiting_approval(unnotified_only=unnotified)
-    return {"posts": posts}
+    queue = queue_info()
+    # Строка-счётчик для каждого поста: n8n добавляет её под текстом поста
+    for item in posts:
+        item["queue_line"] = queue["status_line"]
+    return {"posts": posts, "queue": queue}
+
+
+@app.get("/queue/info")
+async def get_queue_info():
+    """Счётчики очереди и прогноз публикаций (для бота и ручной проверки)."""
+    return queue_info()
+
+
+def _plan_slots(count: int, now, published_today: int) -> list:
+    """Ближайшие `count` слотов публикации с учётом дневного лимита.
+
+    Слоты — PUBLICATION_TIMES в часовом поясе публикаций. Сегодня берутся только
+    будущие слоты и только в пределах оставшегося лимита, дальше — по лимиту
+    на каждый следующий день.
+    """
+    from datetime import timedelta
+
+    times = sorted(settings.publication_times)
+    limit = settings.max_publications_per_day
+    planned = []
+    day = 0
+    while len(planned) < count and day < 60:
+        date = now.date() + timedelta(days=day)
+        left = max(0, limit - published_today) if day == 0 else limit
+        for t in times:
+            if left <= 0 or len(planned) >= count:
+                break
+            hour, minute = map(int, t.split(":"))
+            slot = now.replace(year=date.year, month=date.month, day=date.day,
+                               hour=hour, minute=minute, second=0, microsecond=0)
+            if slot <= now:
+                continue
+            planned.append(slot)
+            left -= 1
+        day += 1
+    return planned
+
+
+def _human_time(slot, now) -> str:
+    """«сегодня в 15:00», «завтра в 9:00», «2 ноя в 10:00»."""
+    months = ["янв", "фев", "мар", "апр", "мая", "июн",
+              "июл", "авг", "сен", "окт", "ноя", "дек"]
+    hm = f"{slot.hour}:{slot.minute:02d}"
+    delta = (slot.date() - now.date()).days
+    if delta == 0:
+        return f"сегодня в {hm}"
+    if delta == 1:
+        return f"завтра в {hm}"
+    return f"{slot.day} {months[slot.month - 1]} в {hm}"
+
+
+def queue_info(product_id: Optional[int] = None) -> Dict[str, Any]:
+    """Счётчики очереди, прогноз выхода и готовые строки для бота."""
+    import pytz
+
+    tz = pytz.timezone(settings.publication_timezone)
+    now = datetime.now(tz)
+    snap = db.get_queue_snapshot()
+    queued_ids = snap["queued_product_ids"]
+    awaiting = snap["awaiting"]
+    paused = db.get_system_state("publications_paused") == "true"
+
+    # Лимит публикатор проверяет по дате UTC в момент слота. Слоты 9–21 по
+    # Новосибирску лежат внутри одних суток UTC той же даты, поэтому остаток на
+    # сегодняшние слоты считаем по UTC-дате = сегодняшней местной дате (ночью до
+    # 7:00 по UTC ещё «вчера», и get_publications_today дал бы чужой день).
+    slots = [] if paused else _plan_slots(
+        len(queued_ids), now, db.get_publications_on(now.date().isoformat()))
+
+    position = eta = None
+    if product_id is not None and product_id in queued_ids:
+        position = queued_ids.index(product_id) + 1
+        if position <= len(slots):
+            eta = slots[position - 1]
+
+    if paused:
+        until = "публикации на паузе"
+    elif slots:
+        until = f"хватит до: {_human_time(slots[-1], now)}"
+    else:
+        until = "очередь пуста"
+    status_line = f"📥 Ждут одобрения: {awaiting} · 📅 В очереди: {len(queued_ids)} ({until})"
+
+    if position is None:
+        approve_line = f"✅ Пост одобрен\n{status_line}"
+    elif paused:
+        approve_line = (f"✅ В очереди №{position}, публикации на паузе\n"
+                        f"📥 Ещё ждут одобрения: {awaiting}")
+    else:
+        when = _human_time(eta, now) if eta else "позже"
+        approve_line = (f"✅ В очереди №{position}, выйдет {when}\n"
+                        f"📥 Ещё ждут одобрения: {awaiting}")
+
+    return {
+        "awaiting": awaiting,
+        "queued": len(queued_ids),
+        "paused": paused,
+        "position": position,
+        "eta": eta.isoformat() if eta else None,
+        "last_slot": slots[-1].isoformat() if slots else None,
+        "status_line": status_line,
+        "approve_line": approve_line,
+    }
 
 
 def _resolve_image_url(data) -> Optional[str]:
