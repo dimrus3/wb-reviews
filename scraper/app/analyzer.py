@@ -32,10 +32,36 @@ class Analyzer:
         """Увеличить счётчик запросов"""
         return db.increment_llm_requests()
 
+    def _today_str(self) -> str:
+        """Сегодняшняя дата ДД.ММ.ГГГГ в часовом поясе публикаций."""
+        from datetime import datetime
+        import pytz
+        tz = pytz.timezone(getattr(self.settings, "publication_timezone", "Asia/Novosibirsk"))
+        return datetime.now(tz).strftime("%d.%m.%Y")
+
     async def _call_llm(self, system_prompt: str, user_prompt: str,
                        max_retries: int = 2) -> Optional[str]:
+        """Вызов LLM: основная модель, при сбое — запасная (LLM_FALLBACK_MODEL).
+
+        Запасная включается, только если основная не ответила за все попытки
+        (HTTP-ошибка, таймаут, пустой ответ). Без LLM_FALLBACK_MODEL поведение
+        прежнее: ошибка основной модели уходит наверх.
         """
-        Вызов LLM API
+        fallback = (getattr(self.settings, "llm_fallback_model", "") or "").strip()
+        try:
+            return await self._call_model(self.settings.llm_model, system_prompt,
+                                          user_prompt, max_retries)
+        except Exception as e:
+            if not fallback or fallback == self.settings.llm_model:
+                raise
+            logger.warning(f"Основная модель {self.settings.llm_model} не ответила ({e}) — "
+                           f"пробуем запасную {fallback}")
+            return await self._call_model(fallback, system_prompt, user_prompt, max_retries)
+
+    async def _call_model(self, model: str, system_prompt: str, user_prompt: str,
+                          max_retries: int = 2) -> Optional[str]:
+        """
+        Вызов LLM API конкретной моделью
         """
         for attempt in range(max_retries):
             try:
@@ -46,7 +72,7 @@ class Analyzer:
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": self.settings.llm_model,
+                        "model": model,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
@@ -192,6 +218,9 @@ class Analyzer:
             "цена": product_data.price,
             "рейтинг": product_data.overall_rating,
             "количество_оценок": product_data.ratings_count,
+            # Без реальной даты LLM подставлял в «(проверена ДД.ММ.ГГГГ)» выдуманную
+            # («проверена 2024», «15.01.2025»). Цену собрали только что — сегодня.
+            "дата_проверки_цены": self._today_str(),
             "отзывов_проанализировано": product_data.reviews_collected,
             "вопросов_проанализировано": product_data.questions_collected
         }
