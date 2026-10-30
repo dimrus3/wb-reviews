@@ -255,6 +255,42 @@ class WildberriesScraper:
             logger.error(f"Ошибка при сборе карточки: {e}")
             raise
 
+    LEGACY_FEEDBACK_HOSTS = ["https://feedbacks1.wb.ru", "https://feedbacks2.wb.ru"]
+    FEEDBACK_HOST_API = "https://feedback-bt.wildberries.ru/feedback/api/v2/host?imt={imt}"
+
+    @staticmethod
+    def _feedback_count(payload) -> int:
+        """feedbackCount из ответа API отзывов (0, если ответа нет)."""
+        if not isinstance(payload, dict):
+            return 0
+        count = payload.get("feedbackCount")
+        if isinstance(count, int) and count > 0:
+            return count
+        return len(payload.get("feedbacks") or [])
+
+    async def _resolve_feedback_hosts(self, page: Page, imt_id) -> list:
+        """Адреса шардов отзывов для товара (как делает сам сайт). [] при сбое."""
+        url = self.FEEDBACK_HOST_API.format(imt=imt_id)
+        try:
+            data = await page.evaluate(
+                """async (u) => {
+                    const res = await fetch(u, {headers: {'Accept': 'application/json'}});
+                    if (!res.ok) return {__status: res.status};
+                    return await res.json();
+                }""",
+                url,
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось узнать хост отзывов: {e}")
+            return []
+        if isinstance(data, list):
+            hosts = [h.rstrip("/") for h in data
+                     if isinstance(h, str) and h.startswith("https://")]
+            logger.info(f"Хост отзывов для imtId {imt_id}: {hosts}")
+            return hosts
+        logger.warning(f"feedback-bt ответил неожиданно: {str(data)[:100]}")
+        return []
+
     async def _scrape_reviews(self, page: Page, article: str, product_data: ProductData):
         """Собрать отзывы через публичный API WB.
 
@@ -268,9 +304,16 @@ class WildberriesScraper:
             product_data.reviews_complete = True
             return
 
+        # WB разложил отзывы по шардам feedback-view-NN.wb.ru. Сайт сначала
+        # спрашивает адрес шарда у feedback-bt, потом берёт отзывы оттуда.
+        # Старые feedbacks1/2 для «переехавших» товаров отвечают 200 с нулём
+        # отзывов (не ошибкой!) — так получались посты «по 0 отзывам».
+        hosts = await self._resolve_feedback_hosts(page, product_data.imtId)
+        hosts += [h for h in self.LEGACY_FEEDBACK_HOSTS if h not in hosts]
+
         payload = None
-        for host in ("feedbacks1.wb.ru", "feedbacks2.wb.ru"):
-            url = f"https://{host}/feedbacks/v2/{product_data.imtId}"
+        for base in hosts:
+            url = f"{base}/feedbacks/v2/{product_data.imtId}"
             try:
                 logger.info(f"Загружаем отзывы через API: {url}")
                 data = await page.evaluate(
@@ -282,11 +325,15 @@ class WildberriesScraper:
                     url,
                 )
                 if isinstance(data, dict) and data.get("__status") is None:
-                    payload = data
-                    break
-                logger.warning(f"{host} ответил {data.get('__status') if isinstance(data, dict) else 'ошибка'}")
+                    if self._feedback_count(data) > self._feedback_count(payload):
+                        payload = data
+                    if self._feedback_count(payload) > 0:
+                        break
+                    logger.warning(f"{base} вернул 0 отзывов — пробуем следующий хост")
+                    continue
+                logger.warning(f"{base} ответил {data.get('__status') if isinstance(data, dict) else 'ошибка'}")
             except Exception as e:
-                logger.warning(f"Не удалось получить отзывы с {host}: {e}")
+                logger.warning(f"Не удалось получить отзывы с {base}: {e}")
 
         if not payload:
             logger.warning("Отзывы не получены ни с одного хоста — оставляем пустыми")
@@ -339,74 +386,67 @@ class WildberriesScraper:
         product_data.reviews_complete = collected < self.max_reviews
         logger.info(f"Собрано отзывов: {collected} (всего у товара {count})")
 
+    QUESTIONS_API = "https://questions.wildberries.ru/api/v1/questions?imtId={imt}&take={take}&skip={skip}"
+
     async def _scrape_questions(self, page: Page, article: str, product_data: ProductData):
-        """Собрать вопросы и ответы"""
+        """Собрать вопросы и ответы через API questions.wildberries.ru.
+
+        Раньше вопросы парсились со страницы по классам .question/.qa-item, но
+        WB перевёл сайт на SPA и эти классы пропали: сбор всегда падал по
+        таймауту, и вопросы ни разу не попадали в анализ. Сайт сам берёт их из
+        этого API (JSON: count + questions[].text/createdDate/answer.text).
+        Запрос идёт из уже открытой страницы WB — как и для отзывов.
+        """
         if not product_data.imtId:
             logger.warning("imtId не найден для сбора вопросов")
             return
 
-        url = f"https://www.wildberries.ru/catalog/{article}/questions?imtId={product_data.imtId}"
-        logger.info(f"Загружаем вопросы: {url}")
-
+        collected = 0
+        total = None
+        seen = set()
+        page_size = 30
+        skip = 0
         try:
-            # networkidle на SPA WB не наступает — грузим domcontentloaded и ждём
-            # любой из селекторов вопросов подольше.
-            await page.goto(url, wait_until='domcontentloaded')
-            await page.wait_for_selector('.question, .qa-item', timeout=12000)
-
-            questions_collected = 0
-            seen_questions = set()
-
-            while questions_collected < self.max_questions:
-                question_elements = await page.query_selector_all('.question, .qa-item')
-
-                for elem in question_elements[questions_collected:]:
-                    if questions_collected >= self.max_questions:
-                        break
-
-                    try:
-                        question_obj = Question(question="")
-
-                        # Текст вопроса
-                        q_elem = await elem.query_selector('.question__text, .qa-question')
-                        if q_elem:
-                            question_obj.question = (await q_elem.text_content()).strip()
-
-                        # Дубликат?
-                        if question_obj.question in seen_questions:
-                            continue
-                        seen_questions.add(question_obj.question)
-
-                        # Ответ
-                        a_elem = await elem.query_selector('.question__answer, .qa-answer')
-                        if a_elem:
-                            question_obj.answer = (await a_elem.text_content()).strip()
-
-                        # Дата
-                        date_elem = await elem.query_selector('.question__date, .qa-date')
-                        if date_elem:
-                            question_obj.date = (await date_elem.text_content()).strip()
-
-                        product_data.questions.append(question_obj)
-                        questions_collected += 1
-
-                    except Exception as e:
-                        logger.warning(f"Ошибка при парсинге вопроса: {e}")
-                        continue
-
-                # Проверяем догрузку
-                show_more = await page.query_selector('button:has-text("Показать ещё")')
-                if show_more and questions_collected < self.max_questions:
-                    await show_more.click()
-                    await asyncio.sleep(2)
-                else:
+            while collected < self.max_questions:
+                url = self.QUESTIONS_API.format(imt=product_data.imtId, take=page_size, skip=skip)
+                logger.info(f"Загружаем вопросы через API: {url}")
+                data = await page.evaluate(
+                    """async (u) => {
+                        const res = await fetch(u, {headers: {'Accept': 'application/json'}});
+                        if (!res.ok) return {__status: res.status};
+                        return await res.json();
+                    }""",
+                    url,
+                )
+                if not isinstance(data, dict) or data.get("__status") is not None:
+                    status = data.get("__status") if isinstance(data, dict) else "ошибка"
+                    logger.warning(f"API вопросов ответил {status}")
                     break
-
-            product_data.questions_collected = questions_collected
-            product_data.questions_complete = questions_collected < self.max_questions
-            logger.info(f"Собрано вопросов: {questions_collected}")
-
-        except PlaywrightTimeout:
-            logger.warning("Таймаут при загрузке вопросов - возможно, их нет")
+                if isinstance(data.get("count"), int):
+                    total = data["count"]
+                batch = data.get("questions") or []
+                for q in batch:
+                    if collected >= self.max_questions:
+                        break
+                    text = (q.get("text") or "").strip()
+                    if not text or text in seen:
+                        continue
+                    seen.add(text)
+                    answer = q.get("answer") or {}
+                    answer_text = (answer.get("text") or "").strip() if isinstance(answer, dict) else ""
+                    product_data.questions.append(Question(
+                        question=text,
+                        answer=answer_text or None,
+                        date=q.get("createdDate"),
+                        variant_article=str(q["nmId"]) if q.get("nmId") else None,
+                    ))
+                    collected += 1
+                if len(batch) < page_size:
+                    break
+                skip += page_size
         except Exception as e:
             logger.error(f"Ошибка при сборе вопросов: {e}")
+
+        product_data.questions_collected = collected
+        product_data.questions_complete = total is not None and collected >= min(total, self.max_questions)
+        logger.info(f"Собрано вопросов: {collected} (всего у товара {total})")

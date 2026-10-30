@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     scraper_max_questions: int = 50
     scraper_retry_attempts: int = 3
     scraper_retry_delay: int = 5  # секунд
+    min_reviews_for_post: int = Field(default=5, description="Меньше отзывов — пост не генерируется")
 
     # Публикации
     publication_timezone: str = "Asia/Novosibirsk"

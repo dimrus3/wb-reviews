@@ -774,6 +774,14 @@ async def process_product(product_id: int, article: str):
         db.save_product_data(product_id, product_data)
         logger.info(f"Данные собраны для {article}")
 
+        # Без отзывов обзор писать не из чего: LLM выдаёт пост «по 0 отзывам».
+        # Это сбой сбора (или товар без отзывов) — в failed, LLM не тратим.
+        if (product_data.reviews_collected or 0) < settings.min_reviews_for_post:
+            raise Exception(
+                f"Собрано отзывов: {product_data.reviews_collected or 0} "
+                f"(нужно минимум {settings.min_reviews_for_post}) — пост не создаём"
+            )
+
         # 2. Анализ
         db.update_product_status(product_id, ProductStatus.ANALYZING)
 
