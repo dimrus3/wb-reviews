@@ -11,6 +11,10 @@ from .config import Settings
 logger = logging.getLogger(__name__)
 
 
+class EmptyLLMResponse(Exception):
+    """LLM ответил 200 OK, но без текста — повторяем запрос."""
+
+
 class Analyzer:
     """Анализ данных и генерация постов"""
 
@@ -55,7 +59,15 @@ class Analyzer:
                 response.raise_for_status()
                 data = response.json()
 
-                return data["choices"][0]["message"]["content"]
+                choice = (data.get("choices") or [{}])[0]
+                content = (choice.get("message") or {}).get("content")
+                if not content or not content.strip():
+                    # OpenRouter иногда отдаёт 200 OK с content=null (например,
+                    # модель израсходовала max_tokens на рассуждения). Раньше это
+                    # падало дальше как «'NoneType' object has no attribute 'strip'».
+                    reason = choice.get("finish_reason")
+                    raise EmptyLLMResponse(f"LLM вернул пустой ответ (finish_reason={reason})")
+                return content
 
             except httpx.HTTPStatusError as e:
                 logger.error(f"HTTP ошибка при вызове LLM (попытка {attempt + 1}): {e.response.status_code}")
